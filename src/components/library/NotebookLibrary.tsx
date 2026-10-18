@@ -1,19 +1,34 @@
-import React, { useState } from 'react';
-import { Plus, Search, Moon, Sun, BookMarked, Sparkles } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
 import type { Notebook, PaperTemplate } from '../../types';
 import { NotebookCard } from './NotebookCard';
 import { CreateNotebookModal } from './CreateNotebookModal';
 import { Modal } from '../common/Modal';
+import {
+  Plus,
+  Search,
+  Book,
+  Sun,
+  Moon,
+  Sparkles,
+  ArrowUpDown,
+} from 'lucide-react';
 
 interface NotebookLibraryProps {
   notebooks: Notebook[];
   onOpenNotebook: (notebook: Notebook) => void;
-  onCreateNotebook: (title: string, color: string, template: PaperTemplate) => void;
-  onRenameNotebook: (notebookId: string, newTitle: string) => void;
-  onDeleteNotebook: (notebookId: string) => void;
+  onCreateNotebook: (
+    title: string,
+    coverColor: string,
+    coverPattern: Notebook['coverPattern'],
+    template: PaperTemplate
+  ) => void;
+  onRenameNotebook: (id: string, newTitle: string) => void;
+  onDeleteNotebook: (id: string) => void;
   isDarkMode: boolean;
   onToggleTheme: () => void;
 }
+
+type SortBy = 'updatedAt' | 'title' | 'pageCount';
 
 export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
   notebooks,
@@ -25,14 +40,31 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
   onToggleTheme,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<SortBy>('updatedAt');
+  const [templateFilter, setTemplateFilter] = useState<string>('all');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingNotebook, setEditingNotebook] = useState<Notebook | null>(null);
-  const [deletingNotebook, setDeletingNotebook] = useState<Notebook | null>(null);
   const [newTitle, setNewTitle] = useState('');
+  const [deletingNotebook, setDeletingNotebook] = useState<Notebook | null>(null);
 
-  const filteredNotebooks = notebooks.filter((nb) =>
-    nb.title.toLowerCase().includes(searchQuery.toLowerCase().trim())
-  );
+  // Filter & Sort
+  const filteredNotebooks = useMemo(() => {
+    return notebooks
+      .filter((nb) => {
+        const matchesQuery = nb.title.toLowerCase().includes(searchQuery.toLowerCase().trim());
+        const matchesTemplate = templateFilter === 'all' || nb.defaultTemplate.type === templateFilter;
+        return matchesQuery && matchesTemplate;
+      })
+      .sort((a, b) => {
+        if (sortBy === 'title') {
+          return a.title.localeCompare(b.title);
+        }
+        if (sortBy === 'pageCount') {
+          return (b.pageCount || 1) - (a.pageCount || 1);
+        }
+        return b.updatedAt - a.updatedAt;
+      });
+  }, [notebooks, searchQuery, sortBy, templateFilter]);
 
   const handleStartRename = (nb: Notebook) => {
     setEditingNotebook(nb);
@@ -56,151 +88,216 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
   return (
     <div
       style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
         overflowY: 'auto',
         backgroundColor: 'var(--bg-primary)',
+        color: 'var(--text-primary)',
       }}
     >
-      {/* Top Navigation Bar */}
+      {/* Editorial Header */}
       <header
-        className="glass-panel"
         style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 40,
-          padding: '16px 28px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
           borderBottom: '1px solid var(--border-subtle)',
+          backgroundColor: 'var(--bg-secondary)',
+          padding: '24px 36px',
         }}
       >
-        {/* Brand / Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div
-            style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: 'var(--radius-md)',
-              background: 'linear-gradient(135deg, var(--accent-primary), #4f46e5)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#ffffff',
-              boxShadow: '0 4px 12px var(--accent-glow)',
-            }}
-          >
-            <BookMarked size={20} />
-          </div>
-          <div>
-            <h1 style={{ fontSize: '18px', fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>
-              NoteIn
-            </h1>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              Digital Notebook &amp; Hand-Drawn Notes
-            </span>
-          </div>
-        </div>
-
-        {/* Center Search Input */}
         <div
           style={{
-            position: 'relative',
-            width: '100%',
-            maxWidth: '340px',
-            margin: '0 16px',
+            maxWidth: '1280px',
+            margin: '0 auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '16px',
           }}
         >
-          <Search
-            size={16}
-            style={{
-              position: 'absolute',
-              left: '12px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              color: 'var(--text-muted)',
-            }}
-          />
-          <input
-            type="text"
-            placeholder="Search notebooks..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '8px 12px 8px 36px',
-              borderRadius: 'var(--radius-full)',
-              border: '1px solid var(--border-strong)',
-              backgroundColor: 'var(--bg-secondary)',
-              color: 'var(--text-primary)',
-              fontSize: '13px',
-              outline: 'none',
-              transition: 'all var(--transition-fast)',
-            }}
-            onFocus={(e) => {
-              e.target.style.borderColor = 'var(--accent-primary)';
-              e.target.style.boxShadow = '0 0 0 3px var(--accent-light)';
-            }}
-            onBlur={(e) => {
-              e.target.style.borderColor = 'var(--border-strong)';
-              e.target.style.boxShadow = 'none';
-            }}
-          />
-        </div>
+          {/* Logo & Subtitle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div
+              style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'var(--accent-primary)',
+                color: '#ffffff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 14px var(--accent-glow)',
+              }}
+            >
+              <Book size={22} />
+            </div>
+            <div>
+              <h1
+                style={{
+                  fontSize: '22px',
+                  fontWeight: 800,
+                  letterSpacing: '-0.02em',
+                  color: 'var(--text-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                NoteIn Studio
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    backgroundColor: 'var(--accent-light)',
+                    color: 'var(--accent-primary)',
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)',
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  Web
+                </span>
+              </h1>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                Your personal sanctuary for ideas, sketches, and thoughtful notes
+              </p>
+            </div>
+          </div>
 
-        {/* Right Action Buttons */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {/* Theme Toggle */}
-          <button
-            onClick={onToggleTheme}
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: 'var(--radius-full)',
-              backgroundColor: 'var(--bg-secondary)',
-              border: '1px solid var(--border-subtle)',
-              color: 'var(--text-secondary)',
-            }}
-            title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            aria-label="Toggle theme"
-          >
-            {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
+          {/* Right Action Bar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {/* Search Input */}
+            <div
+              style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              <Search
+                size={15}
+                style={{
+                  position: 'absolute',
+                  left: '12px',
+                  color: 'var(--text-muted)',
+                  pointerEvents: 'none',
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Search notebooks..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  padding: '9px 14px 9px 36px',
+                  borderRadius: 'var(--radius-full)',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
+                  fontSize: '13px',
+                  width: '220px',
+                  outline: 'none',
+                  transition: 'border-color 0.15s, width 0.2s',
+                }}
+                onFocus={(e) => (e.target.style.borderColor = 'var(--accent-primary)')}
+                onBlur={(e) => (e.target.style.borderColor = 'var(--border-subtle)')}
+              />
+            </div>
 
-          {/* New Notebook CTA */}
-          <button
-            onClick={() => setIsCreateOpen(true)}
-            style={{
-              padding: '9px 18px',
-              borderRadius: 'var(--radius-full)',
-              backgroundColor: 'var(--accent-primary)',
-              color: '#ffffff',
-              fontWeight: 600,
-              fontSize: '13px',
-              boxShadow: '0 4px 14px var(--accent-glow)',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-hover)')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-primary)')}
-          >
-            <Plus size={16} />
-            New Notebook
-          </button>
+            {/* Theme Switcher */}
+            <button
+              onClick={onToggleTheme}
+              style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: 'var(--radius-full)',
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+              }}
+              title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label="Toggle theme"
+            >
+              {isDarkMode ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+
+            {/* Create Notebook CTA */}
+            <button
+              onClick={() => setIsCreateOpen(true)}
+              style={{
+                padding: '9px 18px',
+                borderRadius: 'var(--radius-full)',
+                backgroundColor: 'var(--accent-primary)',
+                color: '#ffffff',
+                fontWeight: 600,
+                fontSize: '13px',
+                boxShadow: '0 4px 14px var(--accent-glow)',
+              }}
+            >
+              <Plus size={16} />
+              New Notebook
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* Main Content Workspace */}
+      {/* Main Workspace */}
       <main style={{ padding: '32px 36px', maxWidth: '1280px', width: '100%', margin: '0 auto' }}>
-        {/* Section Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
-          <div>
-            <h2 style={{ fontSize: '20px', fontWeight: 600, color: 'var(--text-primary)' }}>
-              My Notebooks
-            </h2>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              {filteredNotebooks.length} {filteredNotebooks.length === 1 ? 'notebook' : 'notebooks'} stored in local offline IndexedDB
-            </p>
+        {/* Controls Bar: Filter Chips & Sort Dropdown */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+            marginBottom: '26px',
+          }}
+        >
+          {/* Template Filter Chips */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            {['all', 'ruled', 'grid', 'dotted', 'cornell', 'blank'].map((t) => (
+              <button
+                key={t}
+                onClick={() => setTemplateFilter(t)}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  textTransform: 'capitalize',
+                  backgroundColor: templateFilter === t ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                  color: templateFilter === t ? '#ffffff' : 'var(--text-secondary)',
+                  border: templateFilter === t ? '1px solid transparent' : '1px solid var(--border-subtle)',
+                }}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
+          {/* Sort Selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <ArrowUpDown size={14} color="var(--text-muted)" />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortBy)}
+              style={{
+                padding: '5px 10px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-subtle)',
+                backgroundColor: 'var(--bg-secondary)',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontWeight: 600,
+                outline: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="updatedAt">Sort: Last Modified</option>
+              <option value="title">Sort: Title (A-Z)</option>
+              <option value="pageCount">Sort: Page Count</option>
+            </select>
           </div>
         </div>
 
@@ -224,7 +321,7 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
             ))}
           </div>
         ) : (
-          /* Empty State */
+          /* Refined Empty State */
           <div
             className="animate-scale-up"
             style={{
@@ -255,13 +352,13 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
             >
               <Sparkles size={28} />
             </div>
-            <h3 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>
-              {searchQuery ? 'No matching notebooks' : 'No notebooks yet'}
+            <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+              {searchQuery ? 'No matching notebooks' : 'Your studio is waiting'}
             </h3>
-            <p style={{ fontSize: '14px', color: 'var(--text-muted)', maxWidth: '380px', marginBottom: '20px' }}>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)', maxWidth: '380px', marginBottom: '20px' }}>
               {searchQuery
-                ? `No notebooks match "${searchQuery}". Try a different keyword.`
-                : 'Create your first notebook to begin taking handwritten notes, sketching, and studying with digital paper.'}
+                ? `No notebooks match "${searchQuery}". Try a different keyword or reset filters.`
+                : 'Create your first notebook to begin taking handwritten notes, typing thoughts, and sketching on paper.'}
             </p>
             <button
               onClick={() => setIsCreateOpen(true)}
@@ -271,7 +368,7 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
                 backgroundColor: 'var(--accent-primary)',
                 color: '#ffffff',
                 fontWeight: 600,
-                boxShadow: '0 4px 12px var(--accent-glow)',
+                boxShadow: '0 4px 14px var(--accent-glow)',
               }}
             >
               <Plus size={16} />
@@ -378,7 +475,7 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
         }
       >
         <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          Are you sure you want to permanently delete <strong>{deletingNotebook?.title}</strong>? All pages and handwriting will be permanently removed.
+          Are you sure you want to permanently delete <strong>{deletingNotebook?.title}</strong>? All pages, handwriting, and text notes will be permanently removed.
         </p>
       </Modal>
     </div>

@@ -3,7 +3,7 @@
  * Replicates the data architecture decompiled from NoteIn APK (com.orion.penkit & Room entities)
  */
 
-export type ToolType = 'pen' | 'highlighter' | 'eraser' | 'pan';
+export type ToolType = 'pen' | 'highlighter' | 'eraser' | 'text' | 'pan';
 
 export type PenStyle = 'ballpoint' | 'fountain' | 'pencil';
 
@@ -34,6 +34,24 @@ export interface Stroke {
   points: Point[];
   bounds: BoundingBox;
   createdAt: number;
+}
+
+export interface TextBox {
+  id: string;
+  pageId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  content: string;
+  fontFamily: string;
+  fontSize: number;    // pt (e.g. 16)
+  color: string;       // HEX
+  bold: boolean;
+  italic: boolean;
+  alignment: 'left' | 'center' | 'right';
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface PaperTemplate {
@@ -86,5 +104,7 @@ export type HistoryAction =
   | { type: 'ADD_STROKE'; stroke: Stroke }
   | { type: 'DELETE_STROKE'; stroke: Stroke }
   | { type: 'DELETE_STROKES'; strokes: Stroke[] }
+  | { type: 'ADD_TEXT_BOX'; textBox: TextBox }
+  | { type: 'DELETE_TEXT_BOX'; textBox: TextBox }
+  | { type: 'UPDATE_TEXT_BOX'; prev: TextBox; current: TextBox }
   | { type: 'CHANGE_TEMPLATE'; pageId: string; prevTemplate: PaperTemplate; nextTemplate: PaperTemplate };
-

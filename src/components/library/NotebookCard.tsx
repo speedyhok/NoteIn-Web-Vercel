@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { MoreVertical, Edit2, Trash2, BookOpen } from 'lucide-react';
 import type { Notebook } from '../../types';
+import { MoreVertical, BookOpen, Trash2, Edit2 } from 'lucide-react';
 
 interface NotebookCardProps {
   notebook: Notebook;
@@ -37,6 +37,19 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
     });
   };
 
+  const getTextureClass = () => {
+    switch (notebook.coverPattern) {
+      case 'marble':
+        return 'cover-texture-marble';
+      case 'gradient':
+        return 'cover-texture-gradient';
+      case 'minimal':
+        return 'cover-texture-minimal';
+      default:
+        return '';
+    }
+  };
+
   return (
     <div
       style={{
@@ -46,29 +59,27 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
         borderRadius: 'var(--radius-lg)',
         backgroundColor: 'var(--bg-secondary)',
         border: '1px solid var(--border-subtle)',
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.03)',
+        boxShadow: '0 4px 14px rgba(0, 0, 0, 0.04)',
         cursor: 'pointer',
-        transition: 'all var(--transition-normal)',
+        transition: 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
         overflow: 'hidden',
       }}
-      className="notebook-card"
       onClick={() => onOpen(notebook)}
       onMouseEnter={(e) => {
-        e.currentTarget.style.transform = 'translateY(-4px)';
-        e.currentTarget.style.boxShadow = '0 12px 24px -4px rgba(0, 0, 0, 0.08)';
-        e.currentTarget.style.borderColor = 'var(--border-strong)';
+        e.currentTarget.style.transform = 'translateY(-5px)';
+        e.currentTarget.style.boxShadow = 'var(--paper-shadow)';
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.transform = 'translateY(0)';
-        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.03)';
-        e.currentTarget.style.borderColor = 'var(--border-subtle)';
+        e.currentTarget.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.04)';
       }}
     >
       {/* Notebook Cover Illustration */}
       <div
+        className={getTextureClass()}
         style={{
-          height: '160px',
-          backgroundColor: notebook.coverColor || '#2563eb',
+          height: '168px',
+          backgroundColor: notebook.coverColor || '#1d4ed8',
           position: 'relative',
           display: 'flex',
           alignItems: 'center',
@@ -77,44 +88,62 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
           overflow: 'hidden',
         }}
       >
-        {/* Leather spine effect */}
+        {/* Physical Notebook Spine & Stitching Details */}
         <div
           style={{
             position: 'absolute',
             left: 0,
             top: 0,
             bottom: 0,
-            width: '18px',
-            backgroundColor: 'rgba(0, 0, 0, 0.22)',
-            borderRight: '1px solid rgba(255, 255, 255, 0.15)',
-            boxShadow: 'inset -2px 0 6px rgba(0, 0, 0, 0.25)',
+            width: '22px',
+            backgroundColor: 'rgba(0, 0, 0, 0.26)',
+            borderRight: '1px solid rgba(255, 255, 255, 0.16)',
+            boxShadow: 'inset -2px 0 6px rgba(0, 0, 0, 0.35)',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-around',
+            alignItems: 'center',
+            padding: '12px 0',
           }}
-        />
+        >
+          {/* Thread stitch marks */}
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div
+              key={i}
+              style={{
+                width: '4px',
+                height: '8px',
+                backgroundColor: 'rgba(255, 255, 255, 0.35)',
+                borderRadius: '1px',
+              }}
+            />
+          ))}
+        </div>
 
-        {/* Embossed Bookmark / Label Plate on Cover */}
+        {/* Embossed Paper Label Plate */}
         <div
           style={{
-            width: '82%',
-            backgroundColor: 'rgba(255, 255, 255, 0.94)',
-            backdropFilter: 'blur(8px)',
+            width: '80%',
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
             borderRadius: 'var(--radius-sm)',
-            padding: '10px 14px',
-            boxShadow: '0 4px 10px rgba(0, 0, 0, 0.15)',
-            border: '1px solid rgba(255, 255, 255, 0.5)',
+            padding: '12px 14px',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.18), inset 0 0 0 1px rgba(0,0,0,0.06)',
+            border: '1px solid rgba(255, 255, 255, 0.8)',
             display: 'flex',
             flexDirection: 'column',
             gap: '4px',
-            marginLeft: '8px',
+            marginLeft: '12px',
           }}
         >
           <div
             style={{
               fontSize: '13px',
-              fontWeight: 600,
-              color: '#1e293b',
+              fontWeight: 700,
+              color: '#1c1917',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
+              letterSpacing: '-0.01em',
             }}
           >
             {notebook.title}
@@ -122,20 +151,21 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
           <div
             style={{
               fontSize: '11px',
-              color: '#64748b',
+              fontWeight: 500,
+              color: '#78716c',
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
               textTransform: 'capitalize',
             }}
           >
-            <BookOpen size={12} />
+            <BookOpen size={11} />
             {notebook.defaultTemplate.type} paper
           </div>
         </div>
       </div>
 
-      {/* Info Card Body */}
+      {/* Info Body */}
       <div
         style={{
           padding: '14px 16px',
@@ -143,9 +173,10 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
           alignItems: 'center',
           justifyContent: 'space-between',
           backgroundColor: 'var(--bg-secondary)',
+          borderTop: '1px solid var(--border-subtle)',
         }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', overflow: 'hidden' }}>
           <h3
             style={{
               fontSize: '14px',
@@ -163,7 +194,7 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
           </div>
         </div>
 
-        {/* More Options Button */}
+        {/* Action Menu */}
         <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
           <button
             onClick={() => setMenuOpen(!menuOpen)}
@@ -171,22 +202,12 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
               padding: '6px',
               borderRadius: 'var(--radius-sm)',
               color: 'var(--text-muted)',
-              transition: 'background var(--transition-fast), color var(--transition-fast)',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
-              e.currentTarget.style.color = 'var(--text-primary)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = 'var(--text-muted)';
             }}
             aria-label="Notebook options"
           >
             <MoreVertical size={16} />
           </button>
 
-          {/* Context Dropdown Menu */}
           {menuOpen && (
             <>
               <div
@@ -194,19 +215,21 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
                 onClick={() => setMenuOpen(false)}
               />
               <div
-                className="glass-panel animate-scale-up"
+                className="animate-scale-up"
                 style={{
                   position: 'absolute',
                   right: 0,
                   top: '100%',
                   marginTop: '4px',
-                  width: '140px',
+                  width: '130px',
                   borderRadius: 'var(--radius-md)',
                   padding: '4px',
                   zIndex: 60,
                   display: 'flex',
                   flexDirection: 'column',
                   backgroundColor: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-subtle)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
                 }}
               >
                 <button
@@ -215,16 +238,14 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
                     onRename(notebook);
                   }}
                   style={{
-                    padding: '8px 12px',
+                    padding: '8px 10px',
                     fontSize: '13px',
                     borderRadius: 'var(--radius-sm)',
                     justifyContent: 'flex-start',
                     color: 'var(--text-primary)',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
-                  <Edit2 size={14} />
+                  <Edit2 size={13} />
                   Rename
                 </button>
                 <button
@@ -233,16 +254,14 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
                     onDelete(notebook);
                   }}
                   style={{
-                    padding: '8px 12px',
+                    padding: '8px 10px',
                     fontSize: '13px',
                     borderRadius: 'var(--radius-sm)',
                     justifyContent: 'flex-start',
                     color: 'var(--danger)',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--danger-light)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={13} />
                   Delete
                 </button>
               </div>

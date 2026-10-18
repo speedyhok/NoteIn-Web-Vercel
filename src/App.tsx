@@ -40,9 +40,10 @@ export function App() {
   const handleCreateNotebook = async (
     title: string,
     color: string,
+    coverPattern: Notebook['coverPattern'] = 'solid',
     template: PaperTemplate
   ) => {
-    const { notebook } = await db.createNotebook(title, color, 'solid', template);
+    const { notebook } = await db.createNotebook(title, color, coverPattern, template);
     await refreshNotebooks();
     setActiveNotebook(notebook);
   };

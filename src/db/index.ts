@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Notebook, Page, Stroke, PaperTemplate } from '../types';
+import type { Notebook, Page, Stroke, TextBox, PaperTemplate } from '../types';
 
 export const DEFAULT_A4_WIDTH = 794;
 export const DEFAULT_A4_HEIGHT = 1123;
@@ -16,6 +16,7 @@ export class NoteinDatabase extends Dexie {
   notebooks!: EntityTable<Notebook, 'id'>;
   pages!: EntityTable<Page, 'id'>;
   strokes!: EntityTable<Stroke, 'id'>;
+  textBoxes!: EntityTable<TextBox, 'id'>;
 
   constructor() {
     super('NoteinDatabase');
@@ -23,6 +24,9 @@ export class NoteinDatabase extends Dexie {
       notebooks: '&id, title, createdAt, updatedAt',
       pages: '&id, notebookId, pageNumber, createdAt, updatedAt',
       strokes: '&id, pageId, createdAt',
+    });
+    this.version(2).stores({
+      textBoxes: '&id, pageId, createdAt, updatedAt',
     });
   }
 }
@@ -93,10 +97,11 @@ export async function updateNotebookTitle(id: string, title: string): Promise<vo
 }
 
 export async function deleteNotebook(id: string): Promise<void> {
-  await db.transaction('rw', db.notebooks, db.pages, db.strokes, async () => {
+  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, async () => {
     const pages = await db.pages.where('notebookId').equals(id).toArray();
     const pageIds = pages.map((p) => p.id);
 
+    await db.textBoxes.where('pageId').anyOf(pageIds).delete();
     await db.strokes.where('pageId').anyOf(pageIds).delete();
     await db.pages.where('notebookId').equals(id).delete();
     await db.notebooks.delete(id);
@@ -157,8 +162,7 @@ export async function duplicatePage(pageId: string): Promise<Page | undefined> {
   const newPageId = crypto.randomUUID();
   const targetNumber = sourcePage.pageNumber + 1;
 
-  // Shift subsequent pages
-  await db.transaction('rw', db.notebooks, db.pages, db.strokes, async () => {
+  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, async () => {
     for (const p of existingPages) {
       if (p.pageNumber >= targetNumber) {
         await db.pages.update(p.id, { pageNumber: p.pageNumber + 1 });
@@ -189,6 +193,20 @@ export async function duplicatePage(pageId: string): Promise<Page | undefined> {
       await db.strokes.bulkAdd(clonedStrokes);
     }
 
+    // Duplicate all text boxes on source page
+    const sourceTextBoxes = await db.textBoxes.where('pageId').equals(pageId).toArray();
+    const clonedTextBoxes: TextBox[] = sourceTextBoxes.map((tb) => ({
+      ...tb,
+      id: crypto.randomUUID(),
+      pageId: newPageId,
+      createdAt: now,
+      updatedAt: now,
+    }));
+
+    if (clonedTextBoxes.length > 0) {
+      await db.textBoxes.bulkAdd(clonedTextBoxes);
+    }
+
     await db.notebooks.update(sourcePage.notebookId, {
       pageCount: existingPages.length + 1,
       updatedAt: now,
@@ -210,7 +228,8 @@ export async function deletePage(pageId: string): Promise<boolean> {
     return false;
   }
 
-  await db.transaction('rw', db.notebooks, db.pages, db.strokes, async () => {
+  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, async () => {
+    await db.textBoxes.where('pageId').equals(pageId).delete();
     await db.strokes.where('pageId').equals(pageId).delete();
     await db.pages.delete(pageId);
 
@@ -258,6 +277,35 @@ export async function saveStrokesForPage(
     await db.strokes.where('pageId').equals(pageId).delete();
     if (strokes.length > 0) {
       await db.strokes.bulkAdd(strokes);
+    }
+    const page = await db.pages.get(pageId);
+    if (page) {
+      const now = Date.now();
+      await db.pages.update(pageId, { updatedAt: now });
+      await db.notebooks.update(page.notebookId, { updatedAt: now });
+    }
+  });
+}
+
+// --- Text Box Operations ---
+
+export async function getTextBoxesForPage(pageId: string): Promise<TextBox[]> {
+  try {
+    return await db.textBoxes.where('pageId').equals(pageId).sortBy('createdAt');
+  } catch (error) {
+    console.error('Failed to get text boxes:', error);
+    return [];
+  }
+}
+
+export async function saveTextBoxesForPage(
+  pageId: string,
+  textBoxes: TextBox[]
+): Promise<void> {
+  await db.transaction('rw', db.textBoxes, db.pages, db.notebooks, async () => {
+    await db.textBoxes.where('pageId').equals(pageId).delete();
+    if (textBoxes.length > 0) {
+      await db.textBoxes.bulkAdd(textBoxes);
     }
     const page = await db.pages.get(pageId);
     if (page) {
@@ -324,4 +372,25 @@ export async function initDefaultData(): Promise<void> {
   ];
 
   await db.strokes.bulkAdd(welcomeStrokes);
+
+  // Add a sample welcome text box
+  const welcomeTextBox: TextBox = {
+    id: crypto.randomUUID(),
+    pageId: initialPage.id,
+    x: 120,
+    y: 200,
+    width: 450,
+    height: 80,
+    content: 'Welcome to NoteIn Web!\nUse the Pen, Highlighter, Eraser, or click the Text tool to type anywhere.',
+    fontFamily: 'Inter',
+    fontSize: 16,
+    color: '#1e293b',
+    bold: false,
+    italic: false,
+    alignment: 'left',
+    createdAt: Date.now() - 3000,
+    updatedAt: Date.now() - 3000,
+  };
+
+  await db.textBoxes.add(welcomeTextBox);
 }

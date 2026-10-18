@@ -1,21 +1,33 @@
 import React, { useState } from 'react';
 import { Modal } from '../common/Modal';
-import type { PaperType, PaperTemplate } from '../../types';
+import type { PaperType, PaperTemplate, Notebook } from '../../types';
 import { Check } from 'lucide-react';
 
 interface CreateNotebookModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (title: string, color: string, template: PaperTemplate) => void;
+  onCreate: (
+    title: string,
+    color: string,
+    coverPattern: Notebook['coverPattern'],
+    template: PaperTemplate
+  ) => void;
 }
 
 const COVER_COLORS = [
-  { name: 'Royal Blue', value: '#2563eb' },
+  { name: 'Cobalt Blue', value: '#1d4ed8' },
   { name: 'Emerald', value: '#059669' },
   { name: 'Crimson', value: '#dc2626' },
   { name: 'Warm Amber', value: '#d97706' },
   { name: 'Deep Violet', value: '#7c3aed' },
   { name: 'Midnight', value: '#334155' },
+];
+
+const PATTERNS: { type: Notebook['coverPattern']; label: string }[] = [
+  { type: 'solid', label: 'Classic Solid' },
+  { type: 'marble', label: 'Marble Grain' },
+  { type: 'minimal', label: 'Minimalist Line' },
+  { type: 'gradient', label: 'Silk Gradient' },
 ];
 
 const TEMPLATES: { type: PaperType; label: string; desc: string }[] = [
@@ -33,6 +45,7 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
 }) => {
   const [title, setTitle] = useState('');
   const [selectedColor, setSelectedColor] = useState(COVER_COLORS[0].value);
+  const [selectedPattern, setSelectedPattern] = useState<Notebook['coverPattern']>('solid');
   const [selectedPaper, setSelectedPaper] = useState<PaperType>('ruled');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -46,7 +59,7 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
       bgColor: '#ffffff',
     };
 
-    onCreate(title.trim() || 'Untitled Notebook', selectedColor, template);
+    onCreate(title.trim() || 'Untitled Notebook', selectedColor, selectedPattern, template);
     setTitle('');
     onClose();
   };
@@ -156,6 +169,42 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
               >
                 {selectedColor === c.value && <Check size={16} color="#ffffff" />}
               </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Cover Texture Pattern */}
+        <div>
+          <label
+            style={{
+              display: 'block',
+              fontSize: '13px',
+              fontWeight: 600,
+              color: 'var(--text-secondary)',
+              marginBottom: '8px',
+            }}
+          >
+            Cover Texture
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+            {PATTERNS.map((p) => (
+              <div
+                key={p.type}
+                onClick={() => setSelectedPattern(p.type)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  border: selectedPattern === p.type ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+                  backgroundColor: selectedPattern === p.type ? 'var(--accent-light)' : 'var(--bg-primary)',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
+                  textAlign: 'center',
+                }}
+              >
+                {p.label}
+              </div>
             ))}
           </div>
         </div>

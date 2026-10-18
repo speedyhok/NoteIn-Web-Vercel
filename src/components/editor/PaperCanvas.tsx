@@ -1,34 +1,62 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import type { Page, Stroke, ToolType, ViewportTransform, Point } from '../../types';
+import type { Page, Stroke, TextBox, ToolType, ViewportTransform, Point } from '../../types';
 import { screenToPage, clampZoom } from '../../engine/transform';
 import { calculateBoundingBox } from '../../engine/spline';
 import { renderPaperBackground } from '../../engine/paper';
 import { renderStrokes, renderStroke } from '../../engine/renderer';
 import { isStrokeIntersectedByEraser } from '../../engine/eraser';
+import { TextBoxOverlay } from './TextBoxOverlay';
 
 interface PaperCanvasProps {
   page: Page;
   strokes: Stroke[];
+  textBoxes: TextBox[];
   activeTool: ToolType;
   currentColor: string;
   currentWidth: number;
   transform: ViewportTransform;
   onTransformChange: (transform: ViewportTransform) => void;
   onAddStroke: (stroke: Stroke) => void;
-  onDeleteStrokes: (strokes: Stroke[]) => void;
+  onStrokesLiveUpdate: (strokes: Stroke[]) => void;
+  onDeleteStrokesCommit: (deletedStrokes: Stroke[]) => void;
+  // Text box handlers
+  onCreateTextBox: (x: number, y: number) => void;
+  selectedTextBoxId: string | null;
+  editingTextBoxId: string | null;
+  onSelectTextBox: (id: string | null) => void;
+  onStartEditingTextBox: (id: string) => void;
+  onEndEditingTextBox: (id: string, newContent: string) => void;
+  onUpdateTextBoxPosition: (id: string, newX: number, newY: number) => void;
+  onCommitTextBoxPosition: (id: string, oldX: number, oldY: number, newX: number, newY: number) => void;
+  onUpdateTextBoxSize: (id: string, newW: number, newH: number) => void;
+  onCommitTextBoxSize: (id: string, oldW: number, oldH: number, newW: number, newH: number) => void;
+  onDeleteTextBox: (id: string) => void;
   isDarkMode: boolean;
 }
 
 export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   page,
   strokes,
+  textBoxes,
   activeTool,
   currentColor,
   currentWidth,
   transform,
   onTransformChange,
   onAddStroke,
-  onDeleteStrokes,
+  onStrokesLiveUpdate,
+  onDeleteStrokesCommit,
+  onCreateTextBox,
+  selectedTextBoxId,
+  editingTextBoxId,
+  onSelectTextBox,
+  onStartEditingTextBox,
+  onEndEditingTextBox,
+  onUpdateTextBoxPosition,
+  onCommitTextBoxPosition,
+  onUpdateTextBoxSize,
+  onCommitTextBoxSize,
+  onDeleteTextBox,
   isDarkMode,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -40,6 +68,14 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const activePointsRef = useRef<Point[]>([]);
   const lastPanPointRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Group erased strokes across a single continuous gesture
+  const erasedInGestureRef = useRef<Map<string, Stroke>>(new Map());
+  // Keep track of current strokes for eraser collision without stale closures
+  const currentStrokesRef = useRef<Stroke[]>(strokes);
+  useEffect(() => {
+    currentStrokesRef.current = strokes;
+  }, [strokes]);
 
   // Render Paper Background
   useEffect(() => {
@@ -108,15 +144,34 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
     if (ctx) ctx.scale(dpr, dpr);
   }, [page.width, page.height]);
 
+  // Eraser Collision Check
+  const checkEraserCollision = (pt: Point) => {
+    const eraserRadius = currentWidth * 1.5;
+    const currentList = currentStrokesRef.current;
+    const hitList = currentList.filter((s) =>
+      isStrokeIntersectedByEraser(pt, eraserRadius, s)
+    );
+
+    if (hitList.length > 0) {
+      hitList.forEach((s) => erasedInGestureRef.current.set(s.id, s));
+      const hitIds = new Set(hitList.map((s) => s.id));
+      const remaining = currentList.filter((s) => !hitIds.has(s.id));
+      currentStrokesRef.current = remaining;
+      onStrokesLiveUpdate(remaining);
+    }
+  };
+
   // Pointer Down Event
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    // Only respond to primary mouse button or touch/pen
     if (e.button !== 0) return;
 
-    // Capture pointer
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // In text mode, clicking canvas deselects any text box
+    if (activeTool !== 'text' && selectedTextBoxId) {
+      onSelectTextBox(null);
+    }
 
-    if (activeTool === 'pan' || e.pointerType === 'touch' && e.altKey) {
+    if (activeTool === 'pan' || (e.pointerType === 'touch' && e.altKey)) {
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
       setIsPanning(true);
       lastPanPointRef.current = { x: e.clientX, y: e.clientY };
       return;
@@ -128,7 +183,18 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
     const rect = container.getBoundingClientRect();
     const pagePt = screenToPage(e.clientX, e.clientY, rect, transform);
 
-    // Clamp pointer within or slightly near page
+    // If text tool, click creates a text box or deselects
+    if (activeTool === "text") {
+      console.log("PaperCanvas: text click at", pagePt.x, pagePt.y);
+      // Check if click was inside page boundaries
+      if (pagePt.x >= 0 && pagePt.x <= page.width && pagePt.y >= 0 && pagePt.y <= page.height) {
+        onCreateTextBox(Math.round(pagePt.x), Math.round(pagePt.y));
+      }
+      return;
+    }
+
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+
     const newPt: Point = {
       x: pagePt.x,
       y: pagePt.y,
@@ -138,6 +204,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
 
     if (activeTool === 'eraser') {
       setIsDrawing(true);
+      erasedInGestureRef.current = new Map();
       checkEraserCollision(newPt);
       return;
     }
@@ -146,18 +213,6 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
       setIsDrawing(true);
       activePointsRef.current = [newPt];
       redrawActiveCanvas();
-    }
-  };
-
-  // Eraser Collision Check
-  const checkEraserCollision = (pt: Point) => {
-    const eraserRadius = currentWidth * 1.5;
-    const hitStrokes = strokes.filter((s) =>
-      isStrokeIntersectedByEraser(pt, eraserRadius, s)
-    );
-
-    if (hitStrokes.length > 0) {
-      onDeleteStrokes(hitStrokes);
     }
   };
 
@@ -207,7 +262,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
-      // Ignored if capture already lost
+      // Ignored
     }
 
     if (isPanning) {
@@ -218,6 +273,15 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
 
     if (!isDrawing) return;
     setIsDrawing(false);
+
+    if (activeTool === 'eraser') {
+      if (erasedInGestureRef.current.size > 0) {
+        const deletedStrokes = Array.from(erasedInGestureRef.current.values());
+        erasedInGestureRef.current = new Map();
+        onDeleteStrokesCommit(deletedStrokes);
+      }
+      return;
+    }
 
     if (activeTool === 'pen' || activeTool === 'highlighter') {
       const points = activePointsRef.current;
@@ -247,7 +311,6 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
     e.preventDefault();
 
     if (e.ctrlKey || e.metaKey) {
-      // Pinch to Zoom
       const container = containerRef.current;
       if (!container) return;
 
@@ -258,7 +321,6 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
       const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
       const newZoom = clampZoom(transform.zoom * zoomFactor);
 
-      // Zoom towards mouse position
       const newPanX = mouseX - (mouseX - transform.panX) * (newZoom / transform.zoom);
       const newPanY = mouseY - (mouseY - transform.panY) * (newZoom / transform.zoom);
 
@@ -268,7 +330,6 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
         panY: newPanY,
       });
     } else {
-      // Two-finger Pan
       onTransformChange({
         ...transform,
         panX: transform.panX - e.deltaX,
@@ -281,6 +342,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   const getCursor = () => {
     if (activeTool === 'pan') return isPanning ? 'grabbing' : 'grab';
     if (activeTool === 'eraser') return 'crosshair';
+    if (activeTool === 'text') return 'text';
     return 'crosshair';
   };
 
@@ -351,6 +413,22 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
             height: `${page.height}px`,
             pointerEvents: 'none',
           }}
+        />
+
+        {/* Layer 4: Text Box DOM Overlay */}
+        <TextBoxOverlay
+          textBoxes={textBoxes}
+          selectedTextBoxId={selectedTextBoxId}
+          editingTextBoxId={editingTextBoxId}
+          onSelectTextBox={onSelectTextBox}
+          onStartEditingTextBox={onStartEditingTextBox}
+          onEndEditingTextBox={onEndEditingTextBox}
+          onUpdatePosition={onUpdateTextBoxPosition}
+          onCommitPosition={onCommitTextBoxPosition}
+          onUpdateSize={onUpdateTextBoxSize}
+          onCommitSize={onCommitTextBoxSize}
+          onDeleteTextBox={onDeleteTextBox}
+          zoom={transform.zoom}
         />
       </div>
     </div>

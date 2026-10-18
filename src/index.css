@@ -1,38 +1,40 @@
-/* NoteIn Design System — Curated Tokens & Core Utilities */
+/* NoteIn Editorial Studio Design System */
 :root {
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  
-  /* Light Theme */
-  --bg-primary: #f8fafc;
+  --font-serif: 'Georgia', Cambria, 'Times New Roman', Times, serif;
+
+  /* Editorial Warm Studio Theme (Light) */
+  --bg-primary: #fbfaf7;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #f1f5f9;
-  --bg-canvas-outer: #e2e8f0;
-  
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
-  
-  --border-subtle: #e2e8f0;
-  --border-strong: #cbd5e1;
-  
-  --accent-primary: #2563eb;
-  --accent-hover: #1d4ed8;
+  --bg-tertiary: #f2efe9;
+  --bg-canvas-outer: #e8e4db;
+
+  --text-primary: #1c1917;
+  --text-secondary: #57534e;
+  --text-muted: #8c857b;
+
+  --border-subtle: #eae6dd;
+  --border-strong: #d7d2c6;
+
+  /* Rich Cobalt Accent */
+  --accent-primary: #1d4ed8;
+  --accent-hover: #1e40af;
   --accent-light: #eff6ff;
-  --accent-glow: rgba(37, 99, 235, 0.25);
+  --accent-glow: rgba(29, 78, 216, 0.2);
 
-  --danger: #ef4444;
+  --danger: #dc2626;
   --danger-light: #fee2e2;
-  --success: #10b981;
-  --warning: #f59e0b;
+  --success: #15803d;
+  --warning: #b45309;
 
-  /* Frosted Glassmorphism (NoteinGlassView equivalent) */
-  --glass-bg: rgba(255, 255, 255, 0.82);
-  --glass-border: rgba(255, 255, 255, 0.6);
-  --glass-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
+  /* Frosted Glass (Used Selectively for Floating Controls) */
+  --glass-bg: rgba(255, 255, 255, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.7);
+  --glass-shadow: 0 12px 32px -4px rgba(28, 25, 23, 0.08), 0 4px 8px -2px rgba(28, 25, 23, 0.04);
   --glass-blur: blur(20px) saturate(180%);
 
   /* Paper Elevation Shadow */
-  --paper-shadow: 0 12px 36px -4px rgba(15, 23, 42, 0.12), 0 4px 12px -2px rgba(15, 23, 42, 0.06);
+  --paper-shadow: 0 16px 48px -6px rgba(28, 25, 23, 0.14), 0 4px 16px -2px rgba(28, 25, 23, 0.06);
 
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -44,18 +46,19 @@
 }
 
 [data-theme='dark'] {
-  --bg-primary: #09090b;
-  --bg-secondary: #121215;
-  --bg-tertiary: #1c1c22;
-  --bg-canvas-outer: #0f0f13;
-  
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  
-  --border-subtle: #27272a;
-  --border-strong: #3f3f46;
-  
+  /* Midnight Obsidian Studio (Dark) */
+  --bg-primary: #121214;
+  --bg-secondary: #1a1a1f;
+  --bg-tertiary: #24242c;
+  --bg-canvas-outer: #0b0b0e;
+
+  --text-primary: #f5f5f4;
+  --text-secondary: #a8a29e;
+  --text-muted: #78716c;
+
+  --border-subtle: #2a2a34;
+  --border-strong: #3f3f4e;
+
   --accent-primary: #3b82f6;
   --accent-hover: #60a5fa;
   --accent-light: rgba(59, 130, 246, 0.15);
@@ -64,11 +67,11 @@
   --danger: #f87171;
   --danger-light: rgba(239, 68, 68, 0.15);
 
-  --glass-bg: rgba(20, 20, 26, 0.82);
+  --glass-bg: rgba(26, 26, 31, 0.88);
   --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-shadow: 0 16px 40px -5px rgba(0, 0, 0, 0.45), 0 6px 12px -2px rgba(0, 0, 0, 0.25);
+  --glass-shadow: 0 16px 40px -5px rgba(0, 0, 0, 0.6), 0 6px 14px -2px rgba(0, 0, 0, 0.35);
 
-  --paper-shadow: 0 16px 48px -4px rgba(0, 0, 0, 0.5), 0 4px 16px -2px rgba(0, 0, 0, 0.3);
+  --paper-shadow: 0 20px 54px -6px rgba(0, 0, 0, 0.7), 0 6px 20px -2px rgba(0, 0, 0, 0.45);
 }
 
 *, *::before, *::after {
@@ -103,23 +106,13 @@ html, body {
 }
 
 @keyframes scaleUp {
-  from { transform: scale(0.95); opacity: 0; }
+  from { transform: scale(0.96); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
 
 @keyframes slideDown {
-  from { transform: translateY(-12px); opacity: 0; }
+  from { transform: translateY(-10px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
-}
-
-@keyframes slideUp {
-  from { transform: translateY(16px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-@keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
-  50% { box-shadow: 0 0 0 8px var(--accent-glow); }
 }
 
 .animate-fade-in {
@@ -134,7 +127,7 @@ html, body {
   animation: slideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-/* Glassmorphism utility */
+/* Selective Glassmorphism */
 .glass-panel {
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
@@ -143,7 +136,7 @@ html, body {
   box-shadow: var(--glass-shadow);
 }
 
-/* Button Reset & Common Styles */
+/* Button Reset */
 button {
   font-family: inherit;
   border: none;
@@ -153,7 +146,7 @@ button {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   transition: all var(--transition-fast);
   color: inherit;
@@ -162,6 +155,20 @@ button {
 button:focus-visible {
   outline: 2px solid var(--accent-primary);
   outline-offset: 2px;
+}
+
+/* Cover Textures */
+.cover-texture-marble {
+  background-image: radial-gradient(circle at 10% 20%, rgba(255, 255, 255, 0.12) 0%, transparent 40%),
+                    radial-gradient(circle at 90% 80%, rgba(0, 0, 0, 0.15) 0%, transparent 40%);
+}
+
+.cover-texture-minimal {
+  border-right: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.cover-texture-gradient {
+  background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.15) 0%, rgba(0, 0, 0, 0.2) 100%);
 }
 
 /* Custom Scrollbar */

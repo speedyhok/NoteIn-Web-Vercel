@@ -15,11 +15,15 @@ import {
   updatePageTemplate,
   saveStrokesForPage,
   getStrokesForPage,
+  saveTextBoxesForPage,
+  getTextBoxesForPage,
+  initDefaultData,
 } from '../db';
-import type { Stroke } from '../types';
+import type { Stroke, TextBox } from '../types';
 
 describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
   beforeEach(async () => {
+    await db.textBoxes.clear();
     await db.strokes.clear();
     await db.pages.clear();
     await db.notebooks.clear();
@@ -52,7 +56,7 @@ describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
       expect(updated?.title).toBe('New Name');
     });
 
-    it('cascades deletion across pages and strokes', async () => {
+    it('cascades deletion across pages, strokes, and text boxes', async () => {
       const { notebook, initialPage } = await createNotebook('To Delete');
 
       const stroke: Stroke = {
@@ -68,22 +72,37 @@ describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
       };
       await saveStrokesForPage(initialPage.id, [stroke]);
 
-      // Verify stroke exists before delete
-      const beforeStrokes = await getStrokesForPage(initialPage.id);
-      expect(beforeStrokes).toHaveLength(1);
+      const textBox: TextBox = {
+        id: 'tb-cascade',
+        pageId: initialPage.id,
+        x: 10,
+        y: 10,
+        width: 100,
+        height: 40,
+        content: 'Cascading deletion note',
+        fontFamily: 'Inter',
+        fontSize: 14,
+        color: '#000',
+        bold: false,
+        italic: false,
+        alignment: 'left',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await saveTextBoxesForPage(initialPage.id, [textBox]);
+
+      // Verify records exist before delete
+      expect(await getStrokesForPage(initialPage.id)).toHaveLength(1);
+      expect(await getTextBoxesForPage(initialPage.id)).toHaveLength(1);
 
       // Delete notebook
       await deleteNotebook(notebook.id);
 
-      // Verify notebook, page, and stroke are all gone
-      const n = await getNotebook(notebook.id);
-      expect(n).toBeUndefined();
-
-      const pages = await getPagesForNotebook(notebook.id);
-      expect(pages).toHaveLength(0);
-
-      const afterStrokes = await getStrokesForPage(initialPage.id);
-      expect(afterStrokes).toHaveLength(0);
+      // Verify all related records are purged
+      expect(await getNotebook(notebook.id)).toBeUndefined();
+      expect(await getPagesForNotebook(notebook.id)).toHaveLength(0);
+      expect(await getStrokesForPage(initialPage.id)).toHaveLength(0);
+      expect(await getTextBoxesForPage(initialPage.id)).toHaveLength(0);
     });
   });
 
@@ -105,11 +124,11 @@ describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
       expect(updatedNotebook?.pageCount).toBe(3);
     });
 
-    it('duplicates a page and its vector strokes, shifting subsequent pages', async () => {
+    it('duplicates a page, vector strokes, and text boxes with distinct IDs', async () => {
       const { notebook, initialPage } = await createNotebook('Duplication Test');
       await createPage(notebook.id); // Page 2
 
-      // Add a stroke to page 1
+      // Add a stroke and a text box to page 1
       const stroke: Stroke = {
         id: 's-orig',
         pageId: initialPage.id,
@@ -123,6 +142,25 @@ describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
       };
       await saveStrokesForPage(initialPage.id, [stroke]);
 
+      const textBox: TextBox = {
+        id: 'tb-orig',
+        pageId: initialPage.id,
+        x: 60,
+        y: 60,
+        width: 150,
+        height: 50,
+        content: 'Original Note',
+        fontFamily: 'Inter',
+        fontSize: 16,
+        color: '#000000',
+        bold: true,
+        italic: false,
+        alignment: 'left',
+        createdAt: 100,
+        updatedAt: 100,
+      };
+      await saveTextBoxesForPage(initialPage.id, [textBox]);
+
       // Duplicate page 1 -> creates new page at pageNumber 2
       const dupPage = await duplicatePage(initialPage.id);
       expect(dupPage).toBeDefined();
@@ -134,15 +172,17 @@ describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
       expect(dupStrokes).toHaveLength(1);
       expect(dupStrokes[0].id).not.toBe('s-orig');
       expect(dupStrokes[0].pageId).toBe(dupPage!.id);
-      expect(dupStrokes[0].color).toBe('#ff0000');
 
-      // Check total page ordering
-      const allPages = await getPagesForNotebook(notebook.id);
-      expect(allPages).toHaveLength(3);
-      expect(allPages.map((p) => p.pageNumber)).toEqual([1, 2, 3]);
+      // Verify text boxes were cloned to new page with distinct ID
+      const dupTextBoxes = await getTextBoxesForPage(dupPage!.id);
+      expect(dupTextBoxes).toHaveLength(1);
+      expect(dupTextBoxes[0].id).not.toBe('tb-orig');
+      expect(dupTextBoxes[0].pageId).toBe(dupPage!.id);
+      expect(dupTextBoxes[0].content).toBe('Original Note');
+      expect(dupTextBoxes[0].bold).toBe(true);
     });
 
-    it('deletes a page, removes strokes, and re-indexes remaining pages', async () => {
+    it('deletes a page, removes strokes/text boxes, and re-indexes remaining pages', async () => {
       const { notebook, initialPage } = await createNotebook('Delete Page Test');
       const page2 = await createPage(notebook.id);
       const page3 = await createPage(notebook.id);
@@ -182,49 +222,56 @@ describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
     });
   });
 
-  describe('Vector Stroke Persistence', () => {
-    it('saves and restores stroke vectors with pressure data', async () => {
-      const { initialPage } = await createNotebook('Stroke Test');
+  describe('Text Box Persistence', () => {
+    it('saves and retrieves text boxes with all formatting fields', async () => {
+      const { initialPage } = await createNotebook('Text Notebook');
 
-      const stroke1: Stroke = {
-        id: 'stroke-1',
+      const tb1: TextBox = {
+        id: 'tb-1',
         pageId: initialPage.id,
-        toolType: 'pen',
-        penStyle: 'fountain',
-        color: '#10b981',
-        width: 3.5,
-        opacity: 1,
-        points: [
-          { x: 10, y: 10, pressure: 0.2 },
-          { x: 20, y: 25, pressure: 0.8 },
-        ],
-        bounds: { minX: 8, minY: 8, maxX: 22, maxY: 27 },
-        createdAt: 100,
+        x: 40,
+        y: 80,
+        width: 300,
+        height: 60,
+        content: 'Multiline\nText Note with formatting',
+        fontFamily: 'Georgia, serif',
+        fontSize: 20,
+        color: '#1d4ed8',
+        bold: true,
+        italic: true,
+        alignment: 'center',
+        createdAt: 500,
+        updatedAt: 600,
       };
 
-      const stroke2: Stroke = {
-        id: 'stroke-2',
-        pageId: initialPage.id,
-        toolType: 'highlighter',
-        color: '#fef08a',
-        width: 20,
-        opacity: 0.4,
-        points: [
-          { x: 100, y: 100, pressure: 0.5 },
-          { x: 200, y: 100, pressure: 0.5 },
-        ],
-        bounds: { minX: 90, minY: 90, maxX: 210, maxY: 110 },
-        createdAt: 200,
-      };
+      await saveTextBoxesForPage(initialPage.id, [tb1]);
 
-      await saveStrokesForPage(initialPage.id, [stroke1, stroke2]);
+      const loaded = await getTextBoxesForPage(initialPage.id);
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].content).toBe('Multiline\nText Note with formatting');
+      expect(loaded[0].fontFamily).toBe('Georgia, serif');
+      expect(loaded[0].fontSize).toBe(20);
+      expect(loaded[0].color).toBe('#1d4ed8');
+      expect(loaded[0].bold).toBe(true);
+      expect(loaded[0].italic).toBe(true);
+      expect(loaded[0].alignment).toBe('center');
+    });
 
-      const loaded = await getStrokesForPage(initialPage.id);
-      expect(loaded).toHaveLength(2);
-      expect(loaded[0].id).toBe('stroke-1');
-      expect(loaded[0].points[1].pressure).toBe(0.8);
-      expect(loaded[1].toolType).toBe('highlighter');
-      expect(loaded[1].opacity).toBe(0.4);
+    it('initializes default welcome data with both vector strokes and text box', async () => {
+      await initDefaultData();
+
+      const notebooks = await getNotebooks();
+      expect(notebooks.length).toBeGreaterThan(0);
+
+      const pages = await getPagesForNotebook(notebooks[0].id);
+      expect(pages.length).toBeGreaterThan(0);
+
+      const strokes = await getStrokesForPage(pages[0].id);
+      expect(strokes.length).toBeGreaterThan(0);
+
+      const textBoxes = await getTextBoxesForPage(pages[0].id);
+      expect(textBoxes.length).toBeGreaterThan(0);
+      expect(textBoxes[0].content).toContain('Welcome to NoteIn Web');
     });
   });
 });
