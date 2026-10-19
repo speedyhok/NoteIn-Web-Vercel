@@ -13,6 +13,9 @@ import {
   listDriveFiles,
   getGoogleClientId,
   uploadNotebookToGoogleDrive,
+  signInAndAuthorizeDrive,
+  requestDriveAccessToken,
+  openGoogleDrivePicker,
   type GooglePickedFile,
 } from '../../services/googleDriveService';
 import { importAnyDocument } from '../../services/documentImporter';
@@ -81,6 +84,8 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
   // Drive files & search
   const [driveFiles, setDriveFiles] = useState<GooglePickedFile[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isPickerOpening, setIsPickerOpening] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Importing & backup states
@@ -119,10 +124,11 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
 
     if (clientId) {
       initializeGoogleIdentity(
-        (user) => {
+        async (user) => {
           setCurrentUser(user);
           setSuccessMessage(`Signed in as ${user.name}`);
           setErrorMessage(null);
+          await loadFiles();
         },
         (error) => {
           console.warn('GIS error:', error);
@@ -159,6 +165,59 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
   }, [isOpen, currentUser, clientId]);
 
   if (!isOpen) return null;
+
+  const handleSignInAndConnect = async () => {
+    setIsSigningIn(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const { user } = await signInAndAuthorizeDrive();
+      setCurrentUser(user);
+      setSuccessMessage(`Signed in as ${user.name}`);
+      await loadFiles();
+    } catch (err: any) {
+      console.warn('Sign in & connect error:', err);
+      setErrorMessage(err?.message || 'Failed to sign in and connect Google Drive.');
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleAuthorizeDrive = async () => {
+    setIsLoadingFiles(true);
+    setErrorMessage(null);
+    try {
+      await requestDriveAccessToken(true);
+      await loadFiles();
+      setSuccessMessage('Google Drive permissions granted!');
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to authorize Google Drive.');
+    } finally {
+      setIsLoadingFiles(false);
+    }
+  };
+
+  const handleOpenGooglePicker = async () => {
+    setIsPickerOpening(true);
+    setErrorMessage(null);
+    try {
+      await openGoogleDrivePicker({
+        onPicked: async (files) => {
+          if (files.length > 0) {
+            await handleImportFile(files[0]);
+          }
+        },
+        onError: (err) => {
+          console.warn('Picker error:', err);
+          setErrorMessage(err?.message || 'Google Picker could not open.');
+        },
+      });
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to open Google Drive picker.');
+    } finally {
+      setIsPickerOpening(false);
+    }
+  };
 
   const handleSignOut = async () => {
     try {
@@ -197,7 +256,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       setSuccessMessage(`Successfully imported "${result.notebook.title}" into NoteIn!`);
       onImportComplete(result.notebook);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to import selected file from Google Drive.');
+      setErrorMessage(err?.message || 'Failed to import selected file from Google Drive.');
     } finally {
       setImportingFileName(null);
       setImportProgress(null);
@@ -252,30 +311,33 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
         position: 'fixed',
         inset: 0,
         backgroundColor: 'rgba(0, 0, 0, 0.55)',
-        backdropFilter: 'blur(5px)',
-        zIndex: 9999,
+        backdropFilter: 'blur(4px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
+        zIndex: 9999,
         padding: '16px',
       }}
-      onClick={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !importingFileName && !isBackingUp) {
+          onClose();
+        }
+      }}
     >
       <div
-        className="animate-scale-up"
         style={{
           width: '100%',
-          maxWidth: '680px',
+          maxWidth: '560px',
           maxHeight: '90vh',
           backgroundColor: 'var(--bg-secondary)',
-          borderRadius: '16px',
           border: '1px solid var(--border-subtle)',
-          boxShadow: '0 24px 48px rgba(0, 0, 0, 0.25)',
+          borderRadius: '16px',
+          boxShadow: '0 20px 40px rgba(0, 0, 0, 0.25)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          animation: 'fadeIn 0.2s ease-out',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div
@@ -303,33 +365,35 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
               <HardDrive size={20} color="#4285f4" />
             </div>
             <div>
-              <h2 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-                Google Drive Cloud Storage
+              <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+                Google Drive
               </h2>
               <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                Open notes, PDFs &amp; documents or back up your library
+                Open notes, PDFs, & backup your notebooks
               </span>
             </div>
           </div>
 
           <button
             onClick={onClose}
+            disabled={!!importingFileName || isBackingUp}
             style={{
+              background: 'transparent',
+              border: 'none',
               padding: '6px',
               borderRadius: '8px',
-              border: 'none',
-              backgroundColor: 'transparent',
+              cursor: importingFileName || isBackingUp ? 'not-allowed' : 'pointer',
               color: 'var(--text-muted)',
-              cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
+              justifyContent: 'center',
             }}
           >
             <X size={18} />
           </button>
         </div>
 
-        {/* Content Body */}
+        {/* Body */}
         <div
           style={{
             padding: '20px',
@@ -346,7 +410,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                 padding: '12px 14px',
                 borderRadius: '8px',
                 backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
                 color: '#ef4444',
                 fontSize: '13px',
                 display: 'flex',
@@ -365,7 +429,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                 padding: '12px 14px',
                 borderRadius: '8px',
                 backgroundColor: 'rgba(22, 163, 74, 0.1)',
-                border: '1px solid rgba(22, 163, 74, 0.3)',
+                border: '1px solid rgba(22, 163, 74, 0.25)',
                 color: '#16a34a',
                 fontSize: '13px',
                 display: 'flex',
@@ -378,11 +442,11 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
             </div>
           )}
 
-          {/* Active Import Progress */}
+          {/* Import Progress Banner */}
           {importingFileName && (
             <div
               style={{
-                padding: '14px 16px',
+                padding: '12px 16px',
                 borderRadius: '10px',
                 backgroundColor: 'rgba(63, 82, 255, 0.08)',
                 border: '1px solid rgba(63, 82, 255, 0.25)',
@@ -395,7 +459,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Loader2 size={16} className="animate-spin" color="#3f52ff" />
                   <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Opening "{importingFileName}"...
+                    Importing "{importingFileName}"...
                   </span>
                 </div>
                 {importProgress && (
@@ -462,9 +526,45 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                 </p>
               </div>
 
+              {/* Primary 1-Click Sign In & Authorize Drive Button */}
+              <button
+                onClick={handleSignInAndConnect}
+                disabled={isSigningIn}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '12px',
+                  backgroundColor: '#ffffff',
+                  color: '#3c4043',
+                  border: '1px solid #dadce0',
+                  borderRadius: '24px',
+                  padding: '11px 26px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: isSigningIn ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 1px 3px rgba(60,64,67, 0.15)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {isSigningIn ? (
+                  <Loader2 size={18} className="animate-spin" color="#4285f4" />
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 48 48">
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                    <path fill="none" d="M0 0h48v48H0z"/>
+                  </svg>
+                )}
+                <span>{isSigningIn ? 'Connecting to Google...' : 'Continue with Google'}</span>
+              </button>
+
+              {/* Fallback container for official GIS script button if rendered */}
               <div
                 ref={googleBtnContainerRef}
-                style={{ minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                style={{ display: 'none' }}
               />
             </div>
           ) : (
@@ -590,33 +690,57 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                   gap: '12px',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <FolderOpen size={16} color="#3f52ff" />
                     <span>Files in Google Drive</span>
                   </h3>
 
-                  <button
-                    onClick={() => loadFiles(searchQuery)}
-                    disabled={isLoadingFiles}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      padding: '5px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--border-subtle)',
-                      backgroundColor: 'var(--bg-secondary)',
-                      color: 'var(--text-secondary)',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      cursor: isLoadingFiles ? 'not-allowed' : 'pointer',
-                    }}
-                    title="Reload files from Google Drive"
-                  >
-                    <RefreshCw size={12} className={isLoadingFiles ? 'animate-spin' : ''} />
-                    <span>Refresh</span>
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                      onClick={handleOpenGooglePicker}
+                      disabled={isPickerOpening}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '5px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border-subtle)',
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: isPickerOpening ? 'not-allowed' : 'pointer',
+                      }}
+                      title="Open Google Drive native picker window"
+                    >
+                      {isPickerOpening ? <Loader2 size={12} className="animate-spin" /> : <FolderOpen size={12} color="#3f52ff" />}
+                      <span>Google Picker</span>
+                    </button>
+
+                    <button
+                      onClick={() => loadFiles(searchQuery)}
+                      disabled={isLoadingFiles}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '5px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border-subtle)',
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text-secondary)',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: isLoadingFiles ? 'not-allowed' : 'pointer',
+                      }}
+                      title="Reload files from Google Drive"
+                    >
+                      <RefreshCw size={12} className={isLoadingFiles ? 'animate-spin' : ''} />
+                      <span>Refresh</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Search Bar */}
@@ -664,8 +788,82 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                       <span>Loading your Google Drive files...</span>
                     </div>
                   ) : filteredFiles.length === 0 ? (
-                    <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                      {searchQuery ? 'No matching files found in Drive.' : 'No files found in your Google Drive.'}
+                    <div style={{ padding: '32px 20px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                      <HardDrive size={32} color="var(--text-muted)" style={{ opacity: 0.5 }} />
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {searchQuery ? `No matching files found for "${searchQuery}"` : 'No files found in your Google Drive'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', maxWidth: '380px', lineHeight: 1.5 }}>
+                        {searchQuery
+                          ? 'Try searching with a different filename.'
+                          : 'If you have existing files in Google Drive, grant Drive permissions below to show all your PDFs and documents, or browse using Google Picker:'}
+                      </div>
+                      {!searchQuery && (
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '6px' }}>
+                          <button
+                            onClick={handleAuthorizeDrive}
+                            disabled={isLoadingFiles}
+                            style={{
+                              padding: '7px 14px',
+                              borderRadius: '8px',
+                              backgroundColor: '#3f52ff',
+                              color: '#ffffff',
+                              border: 'none',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <RefreshCw size={12} className={isLoadingFiles ? 'animate-spin' : ''} />
+                            <span>Authorize & Load Files</span>
+                          </button>
+
+                          <button
+                            onClick={handleOpenGooglePicker}
+                            disabled={isPickerOpening}
+                            style={{
+                              padding: '7px 14px',
+                              borderRadius: '8px',
+                              backgroundColor: 'var(--bg-secondary)',
+                              color: 'var(--text-primary)',
+                              border: '1px solid var(--border-subtle)',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <FolderOpen size={12} color="#3f52ff" />
+                            <span>Open with Google Picker</span>
+                          </button>
+
+                          <button
+                            onClick={handleBackupAllNotebooks}
+                            disabled={isBackingUp}
+                            style={{
+                              padding: '7px 14px',
+                              borderRadius: '8px',
+                              backgroundColor: 'var(--bg-secondary)',
+                              color: 'var(--text-primary)',
+                              border: '1px solid var(--border-subtle)',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <CloudUpload size={12} color="#16a34a" />
+                            <span>Backup Notebooks</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     filteredFiles.map((file) => (

@@ -6,7 +6,9 @@ import type { GoogleUser, Notebook, Page, Stroke, TextBox, NoteinPackage } from 
 
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 export const DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
-export const DRIVE_SCOPES = `${DRIVE_FILE_SCOPE} ${DRIVE_READONLY_SCOPE}`;
+export const USERINFO_EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
+export const USERINFO_PROFILE_SCOPE = 'https://www.googleapis.com/auth/userinfo.profile';
+export const DRIVE_SCOPES = `${USERINFO_EMAIL_SCOPE} ${USERINFO_PROFILE_SCOPE} ${DRIVE_READONLY_SCOPE} ${DRIVE_FILE_SCOPE}`;
 
 const USER_STORAGE_KEY = 'notein_google_auth_user';
 const CLIENT_ID_STORAGE_KEY = 'notein_google_client_id';
@@ -344,6 +346,16 @@ export async function requestDriveAccessToken(forceConsent: boolean = false): Pr
 // PHASE 3: GOOGLE PICKER API INTEGRATION
 // ============================================================================
 
+export function isDriveAuthorized(): boolean {
+  return !!currentAccessToken && tokenExpiresAt > Date.now() + 60000;
+}
+
+export async function signInAndAuthorizeDrive(): Promise<{ user: GoogleUser; token: string }> {
+  const token = await requestDriveAccessToken(true);
+  const user = await fetchGoogleProfileFromApi(token);
+  return { user, token };
+}
+
 export async function loadGooglePickerApi(): Promise<void> {
   if (isPickerLoaded && window.google?.picker) {
     return;
@@ -415,12 +427,6 @@ export async function openGoogleDrivePicker(options: {
   onError?: (err: Error) => void;
 }): Promise<void> {
   const apiKey = getGoogleApiKey();
-  if (!apiKey) {
-    const err = new Error('Google API Key is required for Google Picker. Please set VITE_GOOGLE_API_KEY in .env.local or configure credentials in the settings modal.');
-    options.onError?.(err);
-    throw err;
-  }
-
   const appId = getGoogleAppId();
 
   // 1. Authorize Drive Access Token (least privilege: drive.file)
@@ -474,7 +480,6 @@ export async function openGoogleDrivePicker(options: {
       .addView(presView)
       .addView(uploadView)
       .setOAuthToken(token)
-      .setDeveloperKey(apiKey)
       .setTitle('NoteIn Web — Open from Google Drive')
       .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
       .setOrigin(window.location.protocol + '//' + window.location.host)
@@ -496,6 +501,9 @@ export async function openGoogleDrivePicker(options: {
         }
       });
 
+    if (apiKey) {
+      builder.setDeveloperKey(apiKey);
+    }
     if (appId) {
       builder.setAppId(appId);
     }
@@ -724,16 +732,15 @@ export async function listDriveFiles(searchTerm?: string): Promise<GooglePickedF
 
   const queryParts = [
     "trashed = false",
-    "mimeType != 'application/vnd.google-apps.folder'",
   ];
 
   if (searchTerm && searchTerm.trim()) {
-    const escaped = searchTerm.trim().replace(/['\"]/g, '');
+    const escaped = searchTerm.trim().replace(/['"\\]/g, '');
     queryParts.push(`name contains '${escaped}'`);
   }
 
   const q = queryParts.join(' and ');
-  const url = `https://www.googleapis.com/drive/v3/files?pageSize=50&fields=files(id,name,mimeType,size,modifiedTime,iconLink,webViewLink)&orderBy=modifiedTime desc&q=${encodeURIComponent(q)}`;
+  const url = `https://www.googleapis.com/drive/v3/files?pageSize=100&fields=files(id,name,mimeType,size,modifiedTime,iconLink,webViewLink)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=modifiedTime desc&q=${encodeURIComponent(q)}`;
 
   let res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
@@ -753,7 +760,14 @@ export async function listDriveFiles(searchTerm?: string): Promise<GooglePickedF
   }
 
   const data = await res.json();
-  return (data.files || []).map((f: any) => ({
+  const rawFiles: any[] = data.files || [];
+
+  // Filter out folder entities in JS so users only see actionable files
+  const fileList = rawFiles.filter(
+    (f: any) => f.mimeType !== 'application/vnd.google-apps.folder'
+  );
+
+  return fileList.map((f: any) => ({
     id: f.id,
     name: f.name,
     mimeType: f.mimeType,
