@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { TextBox } from '../../types';
 import { Trash2, GripHorizontal, Edit3, Copy } from 'lucide-react';
 
@@ -33,14 +33,36 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
   onDuplicate,
   zoom,
 }) => {
-  const [content, setContent] = useState(textBox.content);
+  // Normalize content: if it is literally 'Click to edit...' treat as empty
+  const initialContent = textBox.content === 'Click to edit...' || textBox.content === 'Click to edit'
+    ? ''
+    : textBox.content;
+
+  const [content, setContent] = useState(initialContent);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const dragStartRef = useRef<{ clientX: number; clientY: number; origX: number; origY: number } | null>(null);
-  const resizeStartRef = useRef<{ clientX: number; clientY: number; origW: number; origH: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const dragStartRef = useRef<{
+    clientX: number;
+    clientY: number;
+    origX: number;
+    origY: number;
+    hasMoved: boolean;
+  } | null>(null);
+
+  const resizeStartRef = useRef<{
+    clientX: number;
+    clientY: number;
+    origW: number;
+    origH: number;
+  } | null>(null);
 
   // Sync content when prop changes
   useEffect(() => {
-    setContent(textBox.content);
+    const cleanContent = textBox.content === 'Click to edit...' || textBox.content === 'Click to edit'
+      ? ''
+      : textBox.content;
+    setContent(cleanContent);
   }, [textBox.content]);
 
   // Focus textarea when entering edit mode
@@ -52,12 +74,60 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     }
   }, [isEditing]);
 
-  // Handle Drag / Move
-  const handleMovePointerDown = (e: React.PointerEvent) => {
-    if (isEditing) return;
+  // Measure and auto-expand text box dimensions to fit content
+  const autoExpandDimensions = useCallback((text: string, ta?: HTMLTextAreaElement | null) => {
+    const lines = text.split(/\r?\n/);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    let maxLineWidth = 0;
+    if (ctx) {
+      const weight = textBox.bold ? 'bold ' : '';
+      const style = textBox.italic ? 'italic ' : '';
+      ctx.font = `${style}${weight}${textBox.fontSize}px ${textBox.fontFamily || 'Inter, sans-serif'}`;
+      for (const line of lines) {
+        // Expand tab characters to 4 spaces for measurement
+        const expandedLine = line.replace(/\t/g, '    ');
+        const metrics = ctx.measureText(expandedLine);
+        if (metrics.width > maxLineWidth) {
+          maxLineWidth = metrics.width;
+        }
+      }
+    }
+
+    // Required width: longest line + 36px padding for borders
+    const neededWidth = Math.ceil(maxLineWidth + 36);
+    // Expand width up to 960px max width
+    const targetWidth = Math.max(textBox.width, Math.min(960, neededWidth));
+
+    // Required height: line count or scrollHeight
+    const estimatedLineHeight = textBox.fontSize * 1.45;
+    const estimatedHeight = Math.ceil(lines.length * estimatedLineHeight + 24);
+    const scrollH = ta ? ta.scrollHeight + 16 : 0;
+    const targetHeight = Math.max(textBox.height, Math.max(scrollH, estimatedHeight));
+
+    if (targetWidth !== textBox.width || targetHeight !== textBox.height) {
+      onUpdateSize(targetWidth, targetHeight);
+      onCommitSize(textBox.width, textBox.height, targetWidth, targetHeight);
+    }
+  }, [textBox.width, textBox.height, textBox.bold, textBox.italic, textBox.fontSize, textBox.fontFamily, onUpdateSize, onCommitSize]);
+
+  // Drag on Card Body (when in viewing mode) or Grip Handle
+  const handlePointerDown = (e: React.PointerEvent | React.MouseEvent) => {
+    // Only drag with primary left mouse button
+    if (e.button !== 0) return;
+
+    // CRITICAL: Stop propagation so canvas doesn't create new text box or draw strokes
     e.stopPropagation();
+
+    // If user is inside the textarea while editing, allow standard text cursor/selection
+    const isInsideTextarea = (e.target as HTMLElement).tagName === 'TEXTAREA';
+    if (isEditing && isInsideTextarea) {
+      return;
+    }
+
     try {
-      e.currentTarget.setPointerCapture(e.pointerId);
+      if ('pointerId' in e) (e.currentTarget as any).setPointerCapture(e.pointerId);
     } catch {}
 
     dragStartRef.current = {
@@ -65,43 +135,66 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
       clientY: e.clientY,
       origX: textBox.x,
       origY: textBox.y,
+      hasMoved: false,
     };
   };
 
-  const handleMovePointerMove = (e: React.PointerEvent) => {
+  const handlePointerMove = (e: React.PointerEvent | React.MouseEvent) => {
     if (!dragStartRef.current) return;
     e.stopPropagation();
 
     const dx = (e.clientX - dragStartRef.current.clientX) / zoom;
     const dy = (e.clientY - dragStartRef.current.clientY) / zoom;
 
-    onUpdatePosition(
-      Math.round(dragStartRef.current.origX + dx),
-      Math.round(dragStartRef.current.origY + dy)
-    );
+    // Movement threshold to distinguish drag from click
+    if (!dragStartRef.current.hasMoved && Math.hypot(dx, dy) > 3) {
+      dragStartRef.current.hasMoved = true;
+    }
+
+    if (dragStartRef.current.hasMoved) {
+      const newX = Math.round(dragStartRef.current.origX + dx);
+      const newY = Math.round(dragStartRef.current.origY + dy);
+      onUpdatePosition(newX, newY);
+    }
   };
 
-  const handleMovePointerUp = (e: React.PointerEvent) => {
-    if (!dragStartRef.current) return;
+  const handleStartEdit = useCallback(() => {
+    if (content === 'Click to edit...' || content === 'Click to edit') {
+      setContent('');
+    }
+    onSelect();
+    onStartEditing();
+  }, [content, onSelect, onStartEditing]);
+
+  const handlePointerUp = (e: React.PointerEvent | React.MouseEvent) => {
     e.stopPropagation();
 
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {}
-
-    const { origX, origY } = dragStartRef.current;
-    dragStartRef.current = null;
-
-    if (textBox.x !== origX || textBox.y !== origY) {
-      onCommitPosition(origX, origY, textBox.x, textBox.y);
+    if ('pointerId' in e) {
+      try {
+        (e.currentTarget as any).releasePointerCapture(e.pointerId);
+      } catch {}
     }
+
+    if (dragStartRef.current) {
+      const { origX, origY, hasMoved } = dragStartRef.current;
+      dragStartRef.current = null;
+
+      if (hasMoved) {
+        if (textBox.x !== origX || textBox.y !== origY) {
+          onCommitPosition(origX, origY, textBox.x, textBox.y);
+        }
+        return;
+      }
+    }
+
+    handleStartEdit();
   };
 
   // Handle Resize
   const handleResizePointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
     try {
-      e.currentTarget.setPointerCapture(e.pointerId);
+      if ('pointerId' in e) (e.currentTarget as any).setPointerCapture(e.pointerId);
     } catch {}
 
     resizeStartRef.current = {
@@ -130,7 +223,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     e.stopPropagation();
 
     try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
+      if ('pointerId' in e) (e.currentTarget as any).releasePointerCapture(e.pointerId);
     } catch {}
 
     const { origW, origH } = resizeStartRef.current;
@@ -141,19 +234,72 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     }
   };
 
+  // Blur / Commit editing
   const handleBlur = () => {
     onEndEditing(content);
   };
 
+  // Keyboard shortcut handlers (Escape, Tab)
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     e.stopPropagation();
 
     if (e.key === 'Escape') {
       onEndEditing(content);
+      return;
+    }
+
+    // Support Tab key indentation
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const updated = content.substring(0, start) + '    ' + content.substring(end);
+      setContent(updated);
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + 4;
+        }
+      }, 0);
     }
   };
 
-  // Text decoration computation
+  // Handle Paste: preserve exact formatting (tabs, indentation, newlines) and auto-expand
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+
+    e.preventDefault();
+    const ta = e.currentTarget;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const updated = content.substring(0, start) + text + content.substring(end);
+    setContent(updated);
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + text.length;
+        autoExpandDimensions(updated, textareaRef.current);
+      }
+    }, 0);
+  };
+
+  // Dynamic auto-grow on text input
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newText = e.target.value;
+    setContent(newText);
+
+    // Auto-expand height if content grows
+    if (textareaRef.current) {
+      const scrollH = textareaRef.current.scrollHeight + 16;
+      if (scrollH > textBox.height) {
+        onUpdateSize(textBox.width, scrollH);
+        onCommitSize(textBox.width, textBox.height, textBox.width, scrollH);
+      }
+    }
+  };
+
+  // Text decorations
   const textDecorations: string[] = [];
   if (textBox.underline) textDecorations.push('underline');
   if (textBox.strikethrough) textDecorations.push('line-through');
@@ -164,11 +310,17 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
 
   return (
     <div
+      ref={containerRef}
+      onPointerDown={handlePointerDown}
+      onMouseDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onMouseMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onMouseUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onClick={(e) => {
         e.stopPropagation();
-        onSelect();
-        // Immediately start editing on click
-        onStartEditing();
+        handleStartEdit();
       }}
       style={{
         position: 'absolute',
@@ -191,12 +343,12 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
         transition: 'border-color 0.15s ease',
       }}
     >
-      {/* Selection Action Bar (Move Grip, Edit, Duplicate, Delete) */}
+      {/* Floating Selection Action Bar (Move Grip, Edit, Duplicate, Delete) */}
       {isSelected && (
         <div
-          onPointerDown={handleMovePointerDown}
-          onPointerMove={handleMovePointerMove}
-          onPointerUp={handleMovePointerUp}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
           style={{
             position: 'absolute',
             top: '-28px',
@@ -214,11 +366,17 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
           }}
         >
           <GripHorizontal size={13} color="var(--text-muted)" />
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 500, userSelect: 'none' }}>
+            Move
+          </span>
 
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (content === 'Click to edit...' || content === 'Click to edit') {
+                setContent('');
+              }
               onStartEditing();
             }}
             title="Edit Text"
@@ -269,19 +427,23 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
         </div>
       )}
 
-      {/* Editing Mode: Auto-focused Textarea */}
+      {/* Editing Mode: Auto-focused Textarea (Empty placeholder so NO 'Click to edit' lingers) */}
       {isEditing ? (
         <textarea
           ref={textareaRef}
           value={content}
-          onChange={(e) => setContent(e.target.value)}
+          onChange={handleChange}
+          onPaste={handlePaste}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          placeholder="Type something..."
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          placeholder=""
           style={{
             width: '100%',
             height: '100%',
-            minHeight: `${textBox.height - 12}px`,
+            minHeight: `${textBox.height - 14}px`,
             border: 'none',
             outline: 'none',
             background: 'transparent',
@@ -294,21 +456,25 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             textDecoration,
             textAlign: textBox.alignment,
             lineHeight: 1.45,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            overflowWrap: 'break-word',
+            tabSize: 4,
+            MozTabSize: 4,
             padding: 0,
             margin: 0,
           }}
         />
       ) : (
-        /* Viewing Mode: Click immediately starts editing */
+        /* Viewing Mode */
         <div
           onClick={(e) => {
             e.stopPropagation();
-            onSelect();
-            onStartEditing();
+            handleStartEdit();
           }}
           style={{
             width: '100%',
-            minHeight: `${textBox.height - 12}px`,
+            minHeight: `${textBox.height - 14}px`,
             fontFamily: textBox.fontFamily,
             fontSize: `${textBox.fontSize}px`,
             color: textBox.color,
@@ -319,11 +485,23 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             lineHeight: 1.45,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
-            cursor: 'text',
+            overflowWrap: 'break-word',
+            tabSize: 4,
+            MozTabSize: 4,
+            cursor: isSelected ? 'move' : 'text',
           }}
         >
-          {content || (
-            <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          {content ? (
+            content
+          ) : (
+            <span
+              style={{
+                color: 'var(--text-muted)',
+                fontStyle: 'italic',
+                pointerEvents: 'none',
+                userSelect: 'none',
+              }}
+            >
               Click to edit...
             </span>
           )}

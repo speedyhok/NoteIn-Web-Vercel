@@ -52,6 +52,7 @@ export const NotebookCard: React.FC<NotebookCardProps> = ({
 
   return (
     <div
+      className="notebook-card"
       style={{
         position: 'relative',
         display: 'flex',

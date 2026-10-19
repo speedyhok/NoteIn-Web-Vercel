@@ -271,10 +271,11 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     const existing = textBoxes.find((t) => t.id === id);
     if (!existing) return;
 
-    if (existing.content !== newContent) {
+    const cleanContent = (newContent === 'Click to edit...' || newContent === 'Click to edit') ? '' : newContent;
+    if (existing.content !== cleanContent) {
       const updatedBox: TextBox = {
         ...existing,
-        content: newContent,
+        content: cleanContent,
         updatedAt: Date.now(),
       };
       const updatedList = textBoxes.map((t) => (t.id === id ? updatedBox : t));
