@@ -15,6 +15,7 @@ import {
   uploadNotebookToGoogleDrive,
   signInAndAuthorizeDrive,
   requestDriveAccessToken,
+  hasValidAccessToken,
   openGoogleDrivePicker,
   type GooglePickedFile,
 } from '../../services/googleDriveService';
@@ -139,7 +140,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       );
     }
 
-    if (activeUser) {
+    if (activeUser && hasValidAccessToken()) {
       loadFiles();
     }
   }, [isOpen, clientId, loadFiles]);
@@ -254,8 +255,12 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
         ...prev.slice(0, 4),
       ]);
       setSuccessMessage(`Successfully imported "${result.notebook.title}" into NoteIn!`);
-      onImportComplete(result.notebook);
+      setTimeout(() => {
+        onImportComplete(result.notebook);
+        onClose();
+      }, 500);
     } catch (err: any) {
+      console.error('Import error:', err);
       setErrorMessage(err?.message || 'Failed to import selected file from Google Drive.');
     } finally {
       setImportingFileName(null);

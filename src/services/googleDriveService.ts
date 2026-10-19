@@ -8,14 +8,17 @@ export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 export const DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 export const USERINFO_EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
 export const USERINFO_PROFILE_SCOPE = 'https://www.googleapis.com/auth/userinfo.profile';
-export const DRIVE_SCOPES = `${USERINFO_EMAIL_SCOPE} ${USERINFO_PROFILE_SCOPE} ${DRIVE_READONLY_SCOPE} ${DRIVE_FILE_SCOPE}`;
+export const OPENID_SCOPE = 'openid';
+export const DRIVE_SCOPES = `${OPENID_SCOPE} ${USERINFO_EMAIL_SCOPE} ${USERINFO_PROFILE_SCOPE} ${DRIVE_READONLY_SCOPE} ${DRIVE_FILE_SCOPE}`;
 
 const USER_STORAGE_KEY = 'notein_google_auth_user';
 const CLIENT_ID_STORAGE_KEY = 'notein_google_client_id';
 const API_KEY_STORAGE_KEY = 'notein_google_api_key';
 const APP_ID_STORAGE_KEY = 'notein_google_app_id';
+const TOKEN_STORAGE_KEY = 'notein_google_access_token';
+const TOKEN_EXPIRY_KEY = 'notein_google_token_expiry';
 
-// Token state (in memory only, never stored in long-term persistent storage)
+// Token state (cached in memory and sessionStorage across modal open/close)
 let currentAccessToken: string | null = null;
 let tokenExpiresAt: number = 0;
 let isPickerLoaded = false;
@@ -283,6 +286,10 @@ export async function signOutFromGoogle(): Promise<void> {
 
   currentAccessToken = null;
   tokenExpiresAt = 0;
+  try {
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    sessionStorage.removeItem(TOKEN_EXPIRY_KEY);
+  } catch {}
   clearGoogleUser();
 }
 
@@ -294,6 +301,18 @@ export async function requestDriveAccessToken(forceConsent: boolean = false): Pr
   const clientId = getGoogleClientId();
   if (!clientId) {
     throw new Error('Google Client ID is missing. Please set VITE_GOOGLE_CLIENT_ID or configure credentials in the settings modal.');
+  }
+
+  // Restore from sessionStorage if memory is fresh
+  if (!currentAccessToken) {
+    try {
+      const savedToken = sessionStorage.getItem(TOKEN_STORAGE_KEY);
+      const savedExpiry = Number(sessionStorage.getItem(TOKEN_EXPIRY_KEY)) || 0;
+      if (savedToken && savedExpiry > Date.now() + 60000) {
+        currentAccessToken = savedToken;
+        tokenExpiresAt = savedExpiry;
+      }
+    } catch {}
   }
 
   // Check if current cached token is still valid (with at least 60s buffer)
@@ -326,6 +345,10 @@ export async function requestDriveAccessToken(forceConsent: boolean = false): Pr
           currentAccessToken = tokenResponse.access_token;
           const expiresInSec = Number(tokenResponse.expires_in) || 3600;
           tokenExpiresAt = Date.now() + expiresInSec * 1000;
+          try {
+            sessionStorage.setItem(TOKEN_STORAGE_KEY, currentAccessToken);
+            sessionStorage.setItem(TOKEN_EXPIRY_KEY, String(tokenExpiresAt));
+          } catch {}
           resolve(tokenResponse.access_token);
         },
         error_callback: (err) => {
@@ -342,12 +365,28 @@ export async function requestDriveAccessToken(forceConsent: boolean = false): Pr
   });
 }
 
+export function hasValidAccessToken(): boolean {
+  if (currentAccessToken && tokenExpiresAt > Date.now() + 60000) {
+    return true;
+  }
+  try {
+    const savedToken = sessionStorage.getItem(TOKEN_STORAGE_KEY);
+    const savedExpiry = Number(sessionStorage.getItem(TOKEN_EXPIRY_KEY)) || 0;
+    if (savedToken && savedExpiry > Date.now() + 60000) {
+      currentAccessToken = savedToken;
+      tokenExpiresAt = savedExpiry;
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 // ============================================================================
 // PHASE 3: GOOGLE PICKER API INTEGRATION
 // ============================================================================
 
 export function isDriveAuthorized(): boolean {
-  return !!currentAccessToken && tokenExpiresAt > Date.now() + 60000;
+  return hasValidAccessToken();
 }
 
 export async function signInAndAuthorizeDrive(): Promise<{ user: GoogleUser; token: string }> {
@@ -539,14 +578,14 @@ export async function downloadDriveFile(
 
   if (isGoogleWorkspaceDoc) {
     // Export Google Docs, Slides, or Sheets to PDF for vector rendering in NoteIn Web
-    downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=application/pdf`;
+    downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=application/pdf&supportsAllDrives=true`;
     effectiveMime = 'application/pdf';
     if (!effectiveName.toLowerCase().endsWith('.pdf')) {
       effectiveName = `${effectiveName}.pdf`;
     }
   } else {
     // Download standard binary / text files (PDF, images, .notein, .in, markdown, text, json)
-    downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
+    downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`;
   }
 
   let response = await fetch(downloadUrl, {
@@ -579,29 +618,54 @@ export async function downloadDriveFile(
     throw new Error(`Failed to download "${file.name}" from Google Drive (${response.status}): ${errorText || response.statusText}`);
   }
 
-  const lowerName = effectiveName.toLowerCase();
-  const isTextual =
-    effectiveMime === 'text/plain' ||
-    effectiveMime === 'text/markdown' ||
-    effectiveMime === 'application/json' ||
-    effectiveMime === 'application/x-notein' ||
-    lowerName.endsWith('.notein') ||
-    lowerName.endsWith('.in') ||
-    lowerName.endsWith('.md') ||
-    lowerName.endsWith('.txt') ||
-    lowerName.endsWith('.json');
+  if (typeof response.arrayBuffer === 'function') {
+    const arrayBuffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    
+    // Check if it's a binary archive: ZIP (PK\x03\x04) or PDF (%PDF) or image
+    const isZip = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04;
+    const isPdf = bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+    const isImage = effectiveMime.startsWith('image/');
 
-  if (isTextual) {
-    const text = await response.text();
+    if (isZip || isPdf || isImage) {
+      return {
+        data: arrayBuffer,
+        filename: effectiveName,
+        mimeType: effectiveMime,
+      };
+    }
+
+    // If it's a text/JSON file, decode to text string
+    const lowerName = effectiveName.toLowerCase();
+    const isTextual =
+      effectiveMime === 'text/plain' ||
+      effectiveMime === 'text/markdown' ||
+      effectiveMime === 'application/json' ||
+      lowerName.endsWith('.notein') ||
+      lowerName.endsWith('.in') ||
+      lowerName.endsWith('.md') ||
+      lowerName.endsWith('.txt') ||
+      lowerName.endsWith('.json');
+
+    if (isTextual) {
+      const text = new TextDecoder().decode(arrayBuffer);
+      return {
+        data: text,
+        filename: effectiveName,
+        mimeType: effectiveMime,
+      };
+    }
+
     return {
-      data: text,
+      data: arrayBuffer,
       filename: effectiveName,
       mimeType: effectiveMime,
     };
   } else {
-    const arrayBuffer = await response.arrayBuffer();
+    // Fallback for mocked fetch environments where only text() is provided
+    const text = await response.text();
     return {
-      data: arrayBuffer,
+      data: text,
       filename: effectiveName,
       mimeType: effectiveMime,
     };
