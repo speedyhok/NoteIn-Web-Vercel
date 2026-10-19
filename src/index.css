@@ -234,3 +234,87 @@ th {
   background-color: var(--bg-tertiary);
   font-weight: 600;
 }
+
+
+/* Authentic Google Sign-In & Google Drive Animations */
+@keyframes google-indeterminate-1 {
+  0% { left: -35%; right: 100%; }
+  60% { left: 100%; right: -90%; }
+  100% { left: 100%; right: -90%; }
+}
+
+@keyframes google-indeterminate-2 {
+  0% { left: -200%; right: 100%; }
+  60% { left: 107%; right: -8%; }
+  100% { left: 107%; right: -8%; }
+}
+
+.google-linear-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background-color: #e0e2ec;
+  overflow: hidden;
+  border-top-left-radius: 28px;
+  border-top-right-radius: 28px;
+  z-index: 10;
+}
+
+.google-linear-progress::before {
+  content: '';
+  position: absolute;
+  background-color: #0b57d0;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  animation: google-indeterminate-1 2.1s cubic-bezier(0.65, 0.815, 0.735, 0.395) infinite;
+}
+
+.google-linear-progress::after {
+  content: '';
+  position: absolute;
+  background-color: #0b57d0;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  animation: google-indeterminate-2 2.1s cubic-bezier(0.165, 0.84, 0.44, 1) infinite;
+  animation-delay: 1.15s;
+}
+
+.google-outline-input {
+  position: relative;
+  border: 1px solid #747775;
+  border-radius: 4px;
+  padding: 8px 14px 6px 14px;
+  background-color: transparent;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.google-outline-input:focus-within {
+  border-color: #0b57d0;
+  border-width: 2px;
+  padding: 7px 13px 5px 13px;
+}
+
+.google-outline-input.error {
+  border-color: #b3261e !important;
+}
+
+.google-outline-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: #444746;
+  margin-bottom: 2px;
+  letter-spacing: 0.2px;
+}
+
+.google-outline-input:focus-within .google-outline-label {
+  color: #0b57d0;
+}
+
+.google-outline-input.error .google-outline-label {
+  color: #b3261e;
+}
