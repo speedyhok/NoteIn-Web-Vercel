@@ -56,3 +56,23 @@ export function fitPageToContainer(
 
   return { zoom, panX, panY };
 }
+
+export function coverPageToContainer(
+  pageWidth: number,
+  pageHeight: number,
+  containerWidth: number,
+  containerHeight: number,
+  topOffset: number = 0
+): ViewportTransform {
+  const scaleW = containerWidth / pageWidth;
+  const scaleH = Math.max(100, containerHeight - topOffset) / pageHeight;
+
+  // Scale up so document covers the viewport completely
+  const zoom = clampZoom(Math.max(scaleW, scaleH));
+
+  const renderedW = pageWidth * zoom;
+  const panX = Math.round((containerWidth - renderedW) / 2);
+  const panY = Math.round(topOffset);
+
+  return { zoom, panX, panY };
+}

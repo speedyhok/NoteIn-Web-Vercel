@@ -85,6 +85,7 @@ interface ToolbarProps {
   onZoomOut: () => void;
   onResetZoom: () => void;
   onFitPage: () => void;
+  isCoverMode?: boolean;
   // Pages
   currentPageIndex: number;
   totalPages: number;
@@ -157,6 +158,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onZoomOut,
   onResetZoom,
   onFitPage,
+  isCoverMode = true,
   currentPageIndex,
   totalPages,
   onPrevPage,
@@ -921,11 +923,23 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <ZoomIn size={15} />
           </button>
           <button
+            id="cover-screen-btn"
             onClick={onFitPage}
-            style={{ padding: '6px 7px', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)' }}
-            title="Fit Page to Screen"
+            style={{
+              padding: '5px 8px',
+              borderRadius: 'var(--radius-sm)',
+              color: isCoverMode ? 'var(--accent-primary)' : 'var(--text-secondary)',
+              backgroundColor: isCoverMode ? 'var(--accent-light)' : 'transparent',
+              border: isCoverMode ? '1px solid var(--accent-subtle)' : '1px solid transparent',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              cursor: 'pointer',
+            }}
+            title={isCoverMode ? "Cover Screen Active (Click to view full page)" : "Fit Entire Page (Click to cover screen)"}
           >
-            <Maximize2 size={14} />
+            <Maximize2 size={13} />
+            <span style={{ fontSize: '11px', fontWeight: 600 }}>{isCoverMode ? 'Cover' : 'Fit'}</span>
           </button>
         </div>
       </div>

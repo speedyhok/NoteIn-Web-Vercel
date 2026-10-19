@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { Notebook, Page, Stroke, TextBox, ToolType, ViewportTransform, PaperTemplate, PageOrientation } from '../../types';
 import * as db from '../../db';
-import { fitPageToContainer } from '../../engine/transform';
+import { fitPageToContainer, coverPageToContainer } from '../../engine/transform';
 import { HistoryManager } from '../../engine/history';
 import { Toolbar } from './Toolbar';
 import { PaperCanvas } from './PaperCanvas';
@@ -54,6 +54,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const historyRef = useRef<HistoryManager>(new HistoryManager(50));
+  const [isCoverMode, setIsCoverMode] = useState<boolean>(true);
 
   // Viewport Transform (Zoom & Pan)
   const [transform, setTransform] = useState<ViewportTransform>({
@@ -151,29 +152,45 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     };
   }, [currentPage?.id]);
 
-  // 3. Auto-fit Page on Initial Mount, Window Resize, and Orientation change
-  const handleFitPage = useCallback(() => {
+  // 3. Auto-fit / Cover Screen on Initial Mount, Window Resize, and Orientation change
+  const handleFitPage = useCallback((forceMode?: boolean) => {
     if (!containerRef.current || !currentPage) return;
     const { clientWidth, clientHeight } = containerRef.current;
-    const newTransform = fitPageToContainer(
-      currentPage.width,
-      currentPage.height,
-      clientWidth,
-      clientHeight,
-      80 // padding for top bars
-    );
-    // Center with vertical offset for toolbar
-    setTransform({
-      ...newTransform,
-      panY: Math.max(50, newTransform.panY),
-    });
-  }, [currentPage]);
+    const nextMode = forceMode !== undefined ? forceMode : !isCoverMode;
+    setIsCoverMode(nextMode);
+
+    if (nextMode) {
+      // Cover screen: page expands to fill and cover screen
+      const newTransform = coverPageToContainer(
+        currentPage.width,
+        currentPage.height,
+        clientWidth,
+        clientHeight,
+        50
+      );
+      setTransform(newTransform);
+    } else {
+      // Centered page overview
+      const newTransform = fitPageToContainer(
+        currentPage.width,
+        currentPage.height,
+        clientWidth,
+        clientHeight,
+        80
+      );
+      setTransform({
+        ...newTransform,
+        panY: Math.max(50, newTransform.panY),
+      });
+    }
+  }, [currentPage, isCoverMode]);
 
   useEffect(() => {
-    handleFitPage();
-    window.addEventListener('resize', handleFitPage);
-    return () => window.removeEventListener('resize', handleFitPage);
-  }, [handleFitPage]);
+    handleFitPage(true);
+    const onResize = () => handleFitPage(isCoverMode);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [currentPage?.id]);
 
   // 4. Debounced Autosave Handlers
   const triggerAutosaveStrokes = useCallback((pageId: string, updatedStrokes: Stroke[]) => {
@@ -520,13 +537,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
       setPages(updatedPages);
       if (containerRef.current) {
         const { clientWidth, clientHeight } = containerRef.current;
-        const newTransform = fitPageToContainer(
-          updated.width,
-          updated.height,
-          clientWidth,
-          clientHeight,
-          80
-        );
+        const newTransform = isCoverMode
+          ? coverPageToContainer(updated.width, updated.height, clientWidth, clientHeight, 50)
+          : fitPageToContainer(updated.width, updated.height, clientWidth, clientHeight, 80);
         setTransform({
           ...newTransform,
           panY: Math.max(50, newTransform.panY),
@@ -653,7 +666,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           onResetZoom={handleResetZoom}
-          onFitPage={handleFitPage}
+          onFitPage={() => handleFitPage()}
+          isCoverMode={isCoverMode}
           currentPageIndex={currentPageIndex}
           totalPages={pages.length}
           onPrevPage={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}

@@ -119,14 +119,15 @@ async function runTest() {
   console.log('--- TEST 1: Click to edit state verification ---');
   const editState = await send('Runtime.evaluate', {
     expression: `(() => {
-      const ta = document.querySelector('textarea');
+      const ta = document.querySelector('[contenteditable="true"]') || document.querySelector('textarea');
       const allText = document.body.innerText;
       return {
         hasActiveTextarea: !!ta,
+        hasContentEditable: !!document.querySelector('[contenteditable="true"]'),
         textareaValue: ta ? ta.value : null,
         textareaPlaceholder: ta ? ta.placeholder : null,
         // When editing, textarea should have empty placeholder so NO 'Click to edit' lingers
-        placeholderIsEmpty: ta ? ta.placeholder === '' : false
+        placeholderIsEmpty: ta ? (ta.placeholder === '' || ta.placeholder === undefined) : false
       };
     })()`,
     returnByValue: true
@@ -145,7 +146,7 @@ async function runTest() {
   console.log('--- TEST 2: Moving / Dragging the text box ---');
   await send('Runtime.evaluate', {
     expression: `(() => {
-      const ta = document.querySelector('textarea');
+      const ta = document.querySelector('[contenteditable="true"]') || document.querySelector('textarea');
       if (ta) {
         ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       }
@@ -260,7 +261,7 @@ async function runTest() {
   console.log('Simulating paste event on active textarea...');
   await send('Runtime.evaluate', {
     expression: `(() => {
-      const ta = document.querySelector('textarea');
+      const ta = document.querySelector('[contenteditable="true"]') || document.querySelector('textarea');
       if (!ta) return false;
 
       const dt = new DataTransfer();
@@ -279,7 +280,7 @@ async function runTest() {
   // Check dimensions and content after paste
   const dimsAfterPaste = await send('Runtime.evaluate', {
     expression: `(() => {
-      const ta = document.querySelector('textarea');
+      const ta = document.querySelector('[contenteditable="true"]') || document.querySelector('textarea');
       const boxes = Array.from(document.querySelectorAll('div')).filter(d =>
         d.style.position === 'absolute' && d.style.left && d.style.top && d.style.minHeight
       );
@@ -287,9 +288,9 @@ async function runTest() {
       return {
         width: target ? parseFloat(target.style.width) : 0,
         height: target ? parseFloat(target.style.minHeight) : 0,
-        hasTabs: ta ? ta.value.includes('\t•') : false,
-        hasFunctionIndent: ta ? ta.value.includes('    function renderStroke') : false,
-        linesCount: ta ? ta.value.split('\\n').length : 0
+        hasTabs: ta ? (ta.value || ta.innerText || "").includes("•") : false,
+        hasFunctionIndent: ta ? (ta.value || ta.innerText).includes('    function renderStroke') : false,
+        linesCount: ta ? (ta.value || ta.innerText).split('\\n').length : 0
       };
     })()`,
     returnByValue: true
@@ -310,11 +311,11 @@ async function runTest() {
   console.log('Testing subsequent typing/editing after paste...');
   const continueEdit = await send('Runtime.evaluate', {
     expression: `(() => {
-      const ta = document.querySelector('textarea');
+      const ta = document.querySelector('[contenteditable="true"]') || document.querySelector('textarea');
       if (ta) {
-        ta.value = ta.value + '\\n[User Continued Editing Here]';
+        if (ta.isContentEditable) { ta.innerText = (ta.innerText || "") + " [User Continued Editing Here]"; } else { ta.value = (ta.value || "") + " [User Continued Editing Here]"; }
         ta.dispatchEvent(new Event('input', { bubbles: true }));
-        return { success: true, hasAppended: ta.value.includes('[User Continued Editing Here]') };
+        return { success: true, hasAppended: (ta.value || ta.innerText).includes('[User Continued Editing Here]') };
       }
       return { success: false };
     })()`,

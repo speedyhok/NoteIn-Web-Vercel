@@ -18,6 +18,44 @@ interface TextBoxItemProps {
   zoom: number;
 }
 
+// Check if string contains HTML tags
+function isHtml(str: string): boolean {
+  return /<[a-z][\s\S]*>/i.test(str);
+}
+
+// Format raw text or HTML for viewing
+function formatContentForDisplay(raw: string): string {
+  if (!raw) return '';
+  if (raw === 'Click to edit...' || raw === 'Click to edit') return '';
+  if (isHtml(raw)) {
+    return raw;
+  }
+  // Convert plain text: escape special characters, preserve tabs and line breaks
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;')
+    .replace(/\r?\n/g, '<br>');
+}
+
+// Clean and sanitize HTML from clipboard while preserving rich formatting
+function sanitizeClipboardHtml(rawHtml: string): string {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(rawHtml, 'text/html');
+
+    // Remove potentially malicious or disruptive tags
+    doc.querySelectorAll('script, iframe, object, embed, meta, link, applet, head').forEach((el) => el.remove());
+
+    // Unwrap <html> and <body> tags if present
+    const body = doc.body;
+    return body ? body.innerHTML : rawHtml;
+  } catch {
+    return rawHtml;
+  }
+}
+
 export const TextBoxItem: React.FC<TextBoxItemProps> = ({
   textBox,
   isSelected,
@@ -33,14 +71,14 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
   onDuplicate,
   zoom,
 }) => {
-  // Normalize content: if it is literally 'Click to edit...' treat as empty
   const initialContent = textBox.content === 'Click to edit...' || textBox.content === 'Click to edit'
     ? ''
     : textBox.content;
 
   const [content, setContent] = useState(initialContent);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const enterEditTimeRef = useRef<number>(0);
 
   const dragStartRef = useRef<{
     clientX: number;
@@ -59,70 +97,68 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
 
   // Sync content when prop changes
   useEffect(() => {
-    const cleanContent = textBox.content === 'Click to edit...' || textBox.content === 'Click to edit'
+    const clean = textBox.content === 'Click to edit...' || textBox.content === 'Click to edit'
       ? ''
       : textBox.content;
-    setContent(cleanContent);
+    setContent(clean);
   }, [textBox.content]);
 
-  // Focus textarea when entering edit mode
+  // Measure and auto-expand dimensions to fit rich content
+  const autoExpandDimensions = useCallback((el: HTMLElement) => {
+    // el.scrollWidth measures rendered width of long lines, tables, headings
+    const measuredW = el.scrollWidth;
+    const neededWidth = Math.min(1050, Math.max(textBox.width, Math.ceil(measuredW + 36)));
+
+    // el.scrollHeight measures rendered height of all paragraphs, lists, and breaks
+    const measuredH = el.scrollHeight;
+    const neededHeight = Math.max(textBox.height, Math.ceil(measuredH + 20));
+
+    if (neededWidth !== textBox.width || neededHeight !== textBox.height) {
+      onUpdateSize(neededWidth, neededHeight);
+      onCommitSize(textBox.width, textBox.height, neededWidth, neededHeight);
+    }
+  }, [textBox.width, textBox.height, onUpdateSize, onCommitSize]);
+
+  // Focus contentEditable editor when entering edit mode
   useEffect(() => {
-    if (isEditing && textareaRef.current) {
-      textareaRef.current.focus();
-      const len = textareaRef.current.value.length;
-      textareaRef.current.setSelectionRange(len, len);
+    if (isEditing) {
+      enterEditTimeRef.current = Date.now();
+    }
+    if (isEditing && editorRef.current) {
+      const displayHtml = formatContentForDisplay(content);
+      if (editorRef.current.innerHTML !== displayHtml) {
+        editorRef.current.innerHTML = displayHtml;
+      }
+      editorRef.current.focus();
+
+      // Place cursor at the end of content
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(editorRef.current);
+        range.collapse(false);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      } catch {}
     }
   }, [isEditing]);
 
-  // Measure and auto-expand text box dimensions to fit content
-  const autoExpandDimensions = useCallback((text: string, ta?: HTMLTextAreaElement | null) => {
-    const lines = text.split(/\r?\n/);
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-
-    let maxLineWidth = 0;
-    if (ctx) {
-      const weight = textBox.bold ? 'bold ' : '';
-      const style = textBox.italic ? 'italic ' : '';
-      ctx.font = `${style}${weight}${textBox.fontSize}px ${textBox.fontFamily || 'Inter, sans-serif'}`;
-      for (const line of lines) {
-        // Expand tab characters to 4 spaces for measurement
-        const expandedLine = line.replace(/\t/g, '    ');
-        const metrics = ctx.measureText(expandedLine);
-        if (metrics.width > maxLineWidth) {
-          maxLineWidth = metrics.width;
-        }
-      }
+  const handleStartEdit = useCallback(() => {
+    if (content === 'Click to edit...' || content === 'Click to edit') {
+      setContent('');
     }
+    onSelect();
+    onStartEditing();
+  }, [content, onSelect, onStartEditing]);
 
-    // Required width: longest line + 36px padding for borders
-    const neededWidth = Math.ceil(maxLineWidth + 36);
-    // Expand width up to 960px max width
-    const targetWidth = Math.max(textBox.width, Math.min(960, neededWidth));
-
-    // Required height: line count or scrollHeight
-    const estimatedLineHeight = textBox.fontSize * 1.45;
-    const estimatedHeight = Math.ceil(lines.length * estimatedLineHeight + 24);
-    const scrollH = ta ? ta.scrollHeight + 16 : 0;
-    const targetHeight = Math.max(textBox.height, Math.max(scrollH, estimatedHeight));
-
-    if (targetWidth !== textBox.width || targetHeight !== textBox.height) {
-      onUpdateSize(targetWidth, targetHeight);
-      onCommitSize(textBox.width, textBox.height, targetWidth, targetHeight);
-    }
-  }, [textBox.width, textBox.height, textBox.bold, textBox.italic, textBox.fontSize, textBox.fontFamily, onUpdateSize, onCommitSize]);
-
-  // Drag on Card Body (when in viewing mode) or Grip Handle
+  // Drag on Card Body or Grip Handle
   const handlePointerDown = (e: React.PointerEvent | React.MouseEvent) => {
-    // Only drag with primary left mouse button
     if (e.button !== 0) return;
-
-    // CRITICAL: Stop propagation so canvas doesn't create new text box or draw strokes
     e.stopPropagation();
 
-    // If user is inside the textarea while editing, allow standard text cursor/selection
-    const isInsideTextarea = (e.target as HTMLElement).tagName === 'TEXTAREA';
-    if (isEditing && isInsideTextarea) {
+    // If already editing, allow cursor / text selection inside editor
+    const isInsideEditor = editorRef.current && (e.target as Node) && editorRef.current.contains(e.target as Node);
+    if (isEditing && isInsideEditor) {
       return;
     }
 
@@ -146,7 +182,6 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     const dx = (e.clientX - dragStartRef.current.clientX) / zoom;
     const dy = (e.clientY - dragStartRef.current.clientY) / zoom;
 
-    // Movement threshold to distinguish drag from click
     if (!dragStartRef.current.hasMoved && Math.hypot(dx, dy) > 3) {
       dragStartRef.current.hasMoved = true;
     }
@@ -157,14 +192,6 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
       onUpdatePosition(newX, newY);
     }
   };
-
-  const handleStartEdit = useCallback(() => {
-    if (content === 'Click to edit...' || content === 'Click to edit') {
-      setContent('');
-    }
-    onSelect();
-    onStartEditing();
-  }, [content, onSelect, onStartEditing]);
 
   const handlePointerUp = (e: React.PointerEvent | React.MouseEvent) => {
     e.stopPropagation();
@@ -194,7 +221,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
   const handleResizePointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
     try {
-      if ('pointerId' in e) (e.currentTarget as any).setPointerCapture(e.pointerId);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } catch {}
 
     resizeStartRef.current = {
@@ -223,7 +250,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     e.stopPropagation();
 
     try {
-      if ('pointerId' in e) (e.currentTarget as any).releasePointerCapture(e.pointerId);
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {}
 
     const { origW, origH } = resizeStartRef.current;
@@ -235,68 +262,77 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
   };
 
   // Blur / Commit editing
-  const handleBlur = () => {
-    onEndEditing(content);
-  };
-
-  // Keyboard shortcut handlers (Escape, Tab)
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    e.stopPropagation();
-
-    if (e.key === 'Escape') {
-      onEndEditing(content);
+  const handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    // Ignore blur during the initial click/release creation window
+    if (Date.now() - enterEditTimeRef.current < 400) {
+      setTimeout(() => {
+        editorRef.current?.focus();
+      }, 0);
       return;
     }
 
-    // Support Tab key indentation
+    if (e.relatedTarget && containerRef.current?.contains(e.relatedTarget as Node)) {
+      return;
+    }
+    const finalHtml = editorRef.current ? editorRef.current.innerHTML : content;
+    onEndEditing(finalHtml);
+  };
+
+  // Input change in contentEditable
+  const handleInput = (e: React.FormEvent<HTMLDivElement>) => {
+    const updatedHtml = e.currentTarget.innerHTML;
+    setContent(updatedHtml);
+    if (editorRef.current) {
+      autoExpandDimensions(editorRef.current);
+    }
+  };
+
+  // Keyboard shortcuts (Escape, Tab)
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+      const finalHtml = editorRef.current ? editorRef.current.innerHTML : content;
+      onEndEditing(finalHtml);
+      return;
+    }
+
     if (e.key === 'Tab') {
       e.preventDefault();
-      const ta = e.currentTarget;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      const updated = content.substring(0, start) + '    ' + content.substring(end);
-      setContent(updated);
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + 4;
-        }
-      }, 0);
+      document.execCommand('insertHTML', false, '&nbsp;&nbsp;&nbsp;&nbsp;');
     }
   };
 
-  // Handle Paste: preserve exact formatting (tabs, indentation, newlines) and auto-expand
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const text = e.clipboardData.getData('text/plain');
-    if (!text) return;
-
+  // Handle Paste: preserve exact formatting (rich text HTML or plain text) and auto-expand
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const ta = e.currentTarget;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const updated = content.substring(0, start) + text + content.substring(end);
-    setContent(updated);
+    e.stopPropagation();
+
+    const clipboardData = e.clipboardData;
+    const htmlData = clipboardData.getData('text/html');
+    const textData = clipboardData.getData('text/plain');
+
+    let htmlToInsert = '';
+
+    if (htmlData && htmlData.trim()) {
+      htmlToInsert = sanitizeClipboardHtml(htmlData);
+    } else if (textData) {
+      htmlToInsert = formatContentForDisplay(textData);
+    }
+
+    if (!htmlToInsert) return;
+
+    // Use insertHTML to insert rich formatted content into contentEditable at selection
+    document.execCommand('insertHTML', false, htmlToInsert);
+
+    const updatedHtml = editorRef.current ? editorRef.current.innerHTML : htmlToInsert;
+    setContent(updatedHtml);
 
     setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + text.length;
-        autoExpandDimensions(updated, textareaRef.current);
+      if (editorRef.current) {
+        autoExpandDimensions(editorRef.current);
       }
     }, 0);
-  };
-
-  // Dynamic auto-grow on text input
-  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newText = e.target.value;
-    setContent(newText);
-
-    // Auto-expand height if content grows
-    if (textareaRef.current) {
-      const scrollH = textareaRef.current.scrollHeight + 16;
-      if (scrollH > textBox.height) {
-        onUpdateSize(textBox.width, scrollH);
-        onCommitSize(textBox.width, textBox.height, textBox.width, scrollH);
-      }
-    }
   };
 
   // Text decorations
@@ -307,6 +343,8 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
 
   const bgColor = textBox.backgroundColor || 'transparent';
   const hasCustomBg = bgColor !== 'transparent';
+  const displayHtml = formatContentForDisplay(content);
+  const isDisplayEmpty = !displayHtml || displayHtml.trim() === '' || displayHtml === '<br>';
 
   return (
     <div
@@ -337,7 +375,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
           ? `1.5px solid ${textBox.borderColor}`
           : '1.5px solid transparent',
         borderRadius: `${textBox.borderRadius || 6}px`,
-        padding: '6px 8px',
+        padding: '6px 10px',
         backgroundColor: hasCustomBg ? bgColor : isSelected ? 'rgba(59, 130, 246, 0.04)' : 'transparent',
         boxShadow: hasCustomBg ? '0 4px 14px rgba(0, 0, 0, 0.08)' : 'none',
         transition: 'border-color 0.15s ease',
@@ -374,10 +412,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (content === 'Click to edit...' || content === 'Click to edit') {
-                setContent('');
-              }
-              onStartEditing();
+              handleStartEdit();
             }}
             title="Edit Text"
             style={{
@@ -427,19 +462,19 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
         </div>
       )}
 
-      {/* Editing Mode: Auto-focused Textarea (Empty placeholder so NO 'Click to edit' lingers) */}
+      {/* Editing Mode: Rich ContentEditable Editor (Retains full bold, colors, headings, lists & tabs) */}
       {isEditing ? (
-        <textarea
-          ref={textareaRef}
-          value={content}
-          onChange={handleChange}
+        <div
+          ref={editorRef}
+          contentEditable={true}
+          suppressContentEditableWarning={true}
+          onInput={handleInput}
           onPaste={handlePaste}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
-          placeholder=""
           style={{
             width: '100%',
             height: '100%',
@@ -447,7 +482,6 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             border: 'none',
             outline: 'none',
             background: 'transparent',
-            resize: 'none',
             fontFamily: textBox.fontFamily,
             fontSize: `${textBox.fontSize}px`,
             color: textBox.color,
@@ -455,18 +489,17 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             fontStyle: textBox.italic ? 'italic' : 'normal',
             textDecoration,
             textAlign: textBox.alignment,
-            lineHeight: 1.45,
+            lineHeight: 1.5,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
             overflowWrap: 'break-word',
-            tabSize: 4,
-            MozTabSize: 4,
             padding: 0,
             margin: 0,
+            cursor: 'text',
           }}
         />
       ) : (
-        /* Viewing Mode */
+        /* Viewing Mode: Renders rich formatted HTML */
         <div
           onClick={(e) => {
             e.stopPropagation();
@@ -482,18 +515,14 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             fontStyle: textBox.italic ? 'italic' : 'normal',
             textDecoration,
             textAlign: textBox.alignment,
-            lineHeight: 1.45,
+            lineHeight: 1.5,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
             overflowWrap: 'break-word',
-            tabSize: 4,
-            MozTabSize: 4,
             cursor: isSelected ? 'move' : 'text',
           }}
         >
-          {content ? (
-            content
-          ) : (
+          {isDisplayEmpty ? (
             <span
               style={{
                 color: 'var(--text-muted)',
@@ -504,6 +533,8 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             >
               Click to edit...
             </span>
+          ) : (
+            <div dangerouslySetInnerHTML={{ __html: displayHtml }} />
           )}
         </div>
       )}

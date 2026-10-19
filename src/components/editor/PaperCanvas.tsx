@@ -185,13 +185,8 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
     const rect = container.getBoundingClientRect();
     const pagePt = screenToPage(e.clientX, e.clientY, rect, transform);
 
-    // If text tool, click on empty canvas deselects active text box or creates a new one
+    // If text tool, click on paper canvas creates a new text box directly
     if (activeTool === "text") {
-      if (selectedTextBoxId) {
-        onSelectTextBox(null);
-        return;
-      }
-      // Check if click was inside page boundaries
       if (pagePt.x >= 0 && pagePt.x <= page.width && pagePt.y >= 0 && pagePt.y <= page.height) {
         onCreateTextBox(Math.round(pagePt.x), Math.round(pagePt.y));
       }
