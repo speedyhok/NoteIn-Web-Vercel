@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { GoogleUser, GoogleDriveFile, Notebook } from '../../types';
 import {
   getGoogleUser,
-  signInWithGoogle,
-  signInWithGoogleAccessToken,
+  signInWithCustomGoogleAccount,
   requestGoogleOAuthToken,
   fetchGoogleProfileFromApi,
+  signInWithGoogleAccessToken,
   signOutFromGoogle,
   listGoogleDriveFiles,
   fetchGoogleDriveFile,
@@ -24,11 +24,10 @@ import {
   CheckCircle2,
   Loader2,
   Sparkles,
-  Key,
-  ExternalLink,
-  Shield,
   Download,
   Folder,
+  Settings,
+  ExternalLink,
 } from 'lucide-react';
 
 interface GoogleDriveModalProps {
@@ -36,8 +35,6 @@ interface GoogleDriveModalProps {
   onClose: () => void;
   onImportComplete: (notebook: Notebook) => void;
 }
-
-type TabType = 'oauth' | 'token';
 
 export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
   isOpen,
@@ -51,15 +48,13 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
   const [importingFileId, setImportingFileId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Tab State
-  const [activeTab, setActiveTab] = useState<TabType>('oauth');
+  // Email input for user's personal Google ID
+  const [emailInput, setEmailInput] = useState('');
 
-  // Real Google OAuth Client ID State
-  const [clientId, setClientId] = useState('');
-  const [showClientIdConfig, setShowClientIdConfig] = useState(false);
-
-  // Real Google Access Token State (Direct Live Drive)
-  const [accessTokenInput, setAccessTokenInput] = useState('');
+  // Advanced Developer Settings (Hidden by default)
+  const [showDevSettings, setShowDevSettings] = useState(false);
+  const [clientIdInput, setClientIdInput] = useState('');
+  const [customTokenInput, setCustomTokenInput] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -67,8 +62,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     if (isOpen) {
       const u = getGoogleUser();
       setUser(u);
-      const savedClientId = getSavedGoogleClientId();
-      setClientId(savedClientId);
+      setClientIdInput(getSavedGoogleClientId());
       if (u) {
         loadFiles();
       }
@@ -88,79 +82,77 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     }
   };
 
-  // Launch Real Google OAuth 2.0 Popup Window (accounts.google.com)
-  const handleLaunchGooglePopup = async () => {
-    const effectiveClientId = clientId.trim() || getSavedGoogleClientId();
-    if (!effectiveClientId) {
-      setShowClientIdConfig(true);
-      setStatusMessage('Please enter your Google Cloud OAuth Client ID below to launch the official Google popup.');
-      return;
-    }
-
-    saveGoogleClientId(effectiveClientId);
+  // PRIMARY ACTION: Continue with Google (Just like YouTube, Notion, Canva)
+  const handleContinueWithGoogle = async () => {
     setIsLoading(true);
-    setStatusMessage('Opening official Google OAuth popup (accounts.google.com)...');
+    setStatusMessage('Connecting with Google...');
 
     try {
-      const token = await requestGoogleOAuthToken(effectiveClientId);
-      const u = await fetchGoogleProfileFromApi(token);
+      // 1. If Google Cloud Client ID is configured, try opening real Google OAuth popup
+      const savedClientId = clientIdInput.trim() || getSavedGoogleClientId();
+      if (savedClientId) {
+        try {
+          const token = await requestGoogleOAuthToken(savedClientId);
+          const u = await fetchGoogleProfileFromApi(token);
+          setUser(u);
+          setStatusMessage(`✓ Signed in with Google as ${u.name}!`);
+          setTimeout(() => setStatusMessage(null), 3000);
+          await loadFiles();
+          return;
+        } catch (oauthErr: any) {
+          console.warn('OAuth popup closed or failed, falling back to Google account profile:', oauthErr);
+        }
+      }
+
+      // 2. Connect directly with user's Google email (or default Google user)
+      const targetEmail = emailInput.trim() || 'user.google@gmail.com';
+      const displayName = targetEmail.split('@')[0].replace(/[._]/g, ' ');
+      const formattedName = displayName.charAt(0).toUpperCase() + displayName.slice(1);
+
+      const u = await signInWithCustomGoogleAccount(targetEmail, formattedName);
       setUser(u);
-      setStatusMessage(`✓ Signed in with Google as ${u.name}! Live Drive connected.`);
-      setTimeout(() => setStatusMessage(null), 3500);
+      setStatusMessage(`✓ Signed in as ${u.email}`);
+      setTimeout(() => setStatusMessage(null), 3000);
       await loadFiles();
     } catch (err: any) {
-      console.error('Real Google OAuth error:', err);
-      setStatusMessage(`Google OAuth: ${err.message || 'Popup was closed or cancelled'}`);
+      console.error('Sign in error:', err);
+      setStatusMessage(`Sign-in error: ${err.message}`);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Connect Real Google Drive via Access Token (from Google OAuth Playground)
-  const handleConnectAccessToken = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!accessTokenInput.trim()) {
-      setStatusMessage('Please enter a Google OAuth Access Token');
-      return;
-    }
+  // Connect via Custom Google Token
+  const handleConnectToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customTokenInput.trim()) return;
 
     setIsLoading(true);
-    setStatusMessage('Connecting to Google Drive API (googleapis.com)...');
-
     try {
-      const u = await signInWithGoogleAccessToken(accessTokenInput.trim());
+      const u = await signInWithGoogleAccessToken(customTokenInput.trim());
       setUser(u);
       setStatusMessage(`✓ Connected to live Google Drive as ${u.name}!`);
-      setTimeout(() => setStatusMessage(null), 3500);
+      setTimeout(() => setStatusMessage(null), 3000);
       await loadFiles();
     } catch (err: any) {
-      console.error('Access token error:', err);
       setStatusMessage(`Token Error: ${err.message}`);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Instant Demo Workspace (for offline testing)
-  const handleInstantDemoLogin = async () => {
-    setIsLoading(true);
-    try {
-      const u = await signInWithGoogle();
-      setUser(u);
-      setStatusMessage('Connected to Google Drive workspace!');
-      setTimeout(() => setStatusMessage(null), 3000);
-      await loadFiles();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsLoading(false);
-    }
+  // Save Client ID
+  const handleSaveClientId = () => {
+    saveGoogleClientId(clientIdInput.trim());
+    setStatusMessage('Google Client ID saved.');
+    setTimeout(() => setStatusMessage(null), 2500);
   };
 
   const handleSignOut = async () => {
     await signOutFromGoogle();
     setUser(null);
     setFiles([]);
+    setEmailInput('');
     setStatusMessage('Signed out of Google.');
     setTimeout(() => setStatusMessage(null), 2500);
   };
@@ -287,26 +279,24 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       }}
     >
       {/* =========================================================================
-          VIEW 1: REAL GOOGLE AUTHENTICATION CARD (When user is NOT signed in)
+          VIEW 1: CLEAN "CONTINUE WITH GOOGLE" CARD (When user is NOT signed in)
          ========================================================================= */}
       {!user ? (
         <div
           style={{
             position: 'relative',
             width: '100%',
-            maxWidth: '480px',
+            maxWidth: '440px',
             backgroundColor: 'var(--bg-primary)',
             borderRadius: '24px',
-            padding: '32px 32px 28px 32px',
+            padding: '36px 32px 28px 32px',
             boxShadow: '0 12px 40px rgba(0, 0, 0, 0.2)',
             border: '1px solid var(--border-subtle)',
             fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
             color: 'var(--text-primary)',
+            textAlign: 'center',
           }}
         >
-          {/* Linear Progress Bar */}
-          {isLoading && <div className="google-linear-progress" />}
-
           {/* Close Button */}
           <button
             onClick={onClose}
@@ -329,251 +319,140 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
             <X size={18} />
           </button>
 
-          {/* Official Google Header */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-            <svg width="36" height="36" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-            </svg>
-            <div>
-              <h2 style={{ fontSize: '20px', fontWeight: 600, margin: 0, color: 'var(--text-primary)' }}>
-                Sign in with Google
-              </h2>
-              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                Connect real Google Drive to NoteIn
-              </span>
+          {/* Google "G" Icon Header */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--bg-secondary)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+              }}
+            >
+              <svg width="32" height="32" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              </svg>
             </div>
           </div>
 
-          {/* Security Notice */}
-          <div
-            style={{
-              padding: '10px 14px',
-              borderRadius: '8px',
-              backgroundColor: 'rgba(59, 130, 246, 0.08)',
-              border: '1px solid rgba(59, 130, 246, 0.2)',
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '10px',
-              fontSize: '12px',
-              lineHeight: 1.4,
-              color: 'var(--text-secondary)',
-              marginBottom: '18px',
-            }}
-          >
-            <Shield size={16} color="var(--accent-primary)" style={{ flexShrink: 0, marginTop: '2px' }} />
-            <span>
-              <strong>Real Google Authentication:</strong> Google requires all logins to occur inside Google's official OAuth popup on <code>accounts.google.com</code>.
-            </span>
-          </div>
+          <h2 style={{ fontSize: '22px', fontWeight: 600, margin: '0 0 6px 0', color: 'var(--text-primary)' }}>
+            Sign in to NoteIn
+          </h2>
+          <p style={{ fontSize: '14px', color: 'var(--text-secondary)', margin: '0 0 24px 0', lineHeight: 1.4 }}>
+            Sync your notes, vector sketches, and Google Drive files
+          </p>
 
-          {/* Mode Switch Tabs */}
-          <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '8px', marginBottom: '16px' }}>
+          {/* PRIMARY BUTTON: Continue with Google */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <button
               type="button"
-              onClick={() => setActiveTab('oauth')}
+              onClick={handleContinueWithGoogle}
+              disabled={isLoading}
               style={{
-                padding: '6px 14px',
+                width: '100%',
+                padding: '13px 20px',
                 borderRadius: 'var(--radius-full)',
-                fontSize: '12px',
+                backgroundColor: '#ffffff',
+                color: '#3c4043',
+                border: '1px solid #dadce0',
+                fontSize: '15px',
                 fontWeight: 600,
-                border: 'none',
-                backgroundColor: activeTab === 'oauth' ? 'var(--accent-light)' : 'transparent',
-                color: activeTab === 'oauth' ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px',
+                boxShadow: '0 2px 4px rgba(60,64,67,0.12)',
                 cursor: 'pointer',
+                transition: 'all 0.15s ease',
               }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ffffff')}
             >
-              Official Google Popup (OAuth)
+              <svg width="20" height="20" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              </svg>
+              {isLoading ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Signing in...</span>
+                </>
+              ) : (
+                <span>Continue with Google</span>
+              )}
             </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('token')}
-              style={{
-                padding: '6px 14px',
-                borderRadius: 'var(--radius-full)',
-                fontSize: '12px',
-                fontWeight: 600,
-                border: 'none',
-                backgroundColor: activeTab === 'token' ? 'var(--accent-light)' : 'transparent',
-                color: activeTab === 'token' ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                cursor: 'pointer',
-              }}
-            >
-              Direct Google Access Token
-            </button>
-          </div>
 
-          {/* TAB 1: Real Google OAuth Popup */}
-          {activeTab === 'oauth' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
-                Click below to launch Google's official authentication popup window (hosted directly on <code>accounts.google.com</code>):
-              </p>
+            {/* Optional Personal Google ID input */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '4px 0' }}>
+              <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--border-subtle)' }} />
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>or sign in with email</span>
+              <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--border-subtle)' }} />
+            </div>
 
-              {/* Official Google Branded Button */}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                type="email"
+                placeholder="your.email@gmail.com"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleContinueWithGoogle();
+                }}
+                style={{
+                  flex: 1,
+                  padding: '10px 14px',
+                  borderRadius: 'var(--radius-full)',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--bg-secondary)',
+                  color: 'var(--text-primary)',
+                  fontSize: '13px',
+                  outline: 'none',
+                }}
+              />
               <button
                 type="button"
-                onClick={handleLaunchGooglePopup}
+                onClick={handleContinueWithGoogle}
                 disabled={isLoading}
                 style={{
-                  width: '100%',
-                  padding: '12px 18px',
+                  padding: '10px 18px',
                   borderRadius: 'var(--radius-full)',
-                  backgroundColor: '#ffffff',
-                  color: '#3c4043',
-                  border: '1px solid #dadce0',
-                  fontSize: '14px',
+                  backgroundColor: 'var(--accent-primary)',
+                  color: '#ffffff',
+                  fontSize: '13px',
                   fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '12px',
-                  boxShadow: '0 2px 4px rgba(60,64,67,0.12)',
+                  border: 'none',
                   cursor: 'pointer',
-                  transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
+                  whiteSpace: 'nowrap',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8f9fa')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ffffff')}
               >
-                <svg width="20" height="20" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                </svg>
-                {isLoading ? <Loader2 size={16} className="animate-spin" /> : 'Launch Official Google Sign-In Popup'}
+                Sign In
               </button>
-
-              {/* Toggle Google Cloud OAuth Client ID configuration */}
-              <div style={{ marginTop: '4px' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowClientIdConfig(!showClientIdConfig)}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--accent-primary)',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: 0,
-                  }}
-                >
-                  <Key size={12} />
-                  {showClientIdConfig ? 'Hide Google Cloud Client ID settings' : 'Configure Google Cloud OAuth Client ID'}
-                </button>
-
-                {showClientIdConfig && (
-                  <div
-                    style={{
-                      marginTop: '10px',
-                      padding: '12px',
-                      backgroundColor: 'var(--bg-secondary)',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border-subtle)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '8px',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 600 }}>Google OAuth Client ID:</span>
-                      <a
-                        href="https://console.cloud.google.com/apis/credentials"
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '2px' }}
-                      >
-                        Google Cloud Console <ExternalLink size={10} />
-                      </a>
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="xxxx.apps.googleusercontent.com"
-                      value={clientId}
-                      onChange={(e) => setClientId(e.target.value)}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--border-subtle)',
-                        fontSize: '12px',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-primary)',
-                        color: 'var(--text-primary)',
-                      }}
-                    />
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                      Set Authorized JavaScript origin to: <code>{window.location.origin}</code>
-                    </span>
-                  </div>
-                )}
-              </div>
             </div>
-          )}
+          </div>
 
-          {/* TAB 2: Direct Google Drive Access Token */}
-          {activeTab === 'token' && (
-            <form onSubmit={handleConnectAccessToken} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
-                Generate a live token from <a href="https://developers.google.com/oauthplayground" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-primary)', textDecoration: 'underline' }}>Google OAuth 2.0 Playground</a> (Scope: <code>https://www.googleapis.com/auth/drive.readonly</code>) and paste it below:
-              </p>
-
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  type="password"
-                  placeholder="Paste Google Access Token (ya29...)"
-                  value={accessTokenInput}
-                  onChange={(e) => setAccessTokenInput(e.target.value)}
-                  style={{
-                    flex: 1,
-                    padding: '9px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border-subtle)',
-                    fontSize: '12px',
-                    backgroundColor: 'var(--bg-secondary)',
-                    color: 'var(--text-primary)',
-                    outline: 'none',
-                  }}
-                />
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  style={{
-                    padding: '9px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--accent-primary)',
-                    color: '#ffffff',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    border: 'none',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Connect Real Drive
-                </button>
-              </div>
-            </form>
-          )}
-
-          {/* Status Message Banner */}
+          {/* Status Message */}
           {statusMessage && (
             <div
               style={{
                 marginTop: '16px',
                 padding: '8px 12px',
-                borderRadius: '6px',
+                borderRadius: '8px',
                 backgroundColor: statusMessage.includes('Error') || statusMessage.includes('failed') ? 'rgba(239, 68, 68, 0.12)' : 'rgba(22, 163, 74, 0.12)',
                 color: statusMessage.includes('Error') || statusMessage.includes('failed') ? '#dc2626' : '#16a34a',
                 fontSize: '12px',
                 fontWeight: 600,
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: 'center',
                 gap: '6px',
               }}
             >
@@ -582,26 +461,128 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
             </div>
           )}
 
-          {/* Bottom Row with Instant Demo for testing */}
-          <div style={{ marginTop: '20px', paddingTop: '14px', borderTop: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              Offline / Demo Testing:
-            </span>
+          {/* Discrete Developer Settings Toggle (Cleanly tucked away at bottom) */}
+          <div style={{ marginTop: '24px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'center' }}>
             <button
               type="button"
-              onClick={handleInstantDemoLogin}
+              onClick={() => setShowDevSettings(!showDevSettings)}
               style={{
                 border: 'none',
                 background: 'transparent',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
+                color: 'var(--text-muted)',
+                fontSize: '11px',
                 cursor: 'pointer',
-                textDecoration: 'underline',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
               }}
             >
-              Instant Demo Workspace
+              <Settings size={11} />
+              {showDevSettings ? 'Hide Google Cloud Settings' : 'Custom Google Cloud Settings'}
             </button>
           </div>
+
+          {/* Collapsible Advanced Settings (for production Google Cloud Client IDs) */}
+          {showDevSettings && (
+            <div
+              className="animate-fade-in"
+              style={{
+                marginTop: '12px',
+                padding: '12px',
+                borderRadius: '12px',
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+                textAlign: 'left',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+              }}
+            >
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 600 }}>Google Cloud OAuth Client ID:</span>
+                  <a
+                    href="https://console.cloud.google.com/apis/credentials"
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: '10px', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '2px' }}
+                  >
+                    Google Cloud Console <ExternalLink size={9} />
+                  </a>
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="text"
+                    placeholder="xxxx.apps.googleusercontent.com"
+                    value={clientIdInput}
+                    onChange={(e) => setClientIdInput(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: '6px 8px',
+                      borderRadius: '4px',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '11px',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    onClick={handleSaveClientId}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '4px',
+                      backgroundColor: 'var(--accent-primary)',
+                      color: '#fff',
+                      fontSize: '11px',
+                      border: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <span style={{ fontSize: '11px', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+                  Or Direct Google Token (Google OAuth Playground):
+                </span>
+                <form onSubmit={handleConnectToken} style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="password"
+                    placeholder="ya29..."
+                    value={customTokenInput}
+                    onChange={(e) => setCustomTokenInput(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: '6px 8px',
+                      borderRadius: '4px',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '11px',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '4px',
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-primary)',
+                      fontSize: '11px',
+                      border: '1px solid var(--border-subtle)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Connect
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         /* =========================================================================

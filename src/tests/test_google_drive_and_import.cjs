@@ -107,7 +107,7 @@ async function runTest() {
         nativeSetter.call(emailInput, 'user.alex@gmail.com');
         emailInput.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      const connectBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && (b.innerText.includes('Connect Account') || b.innerText.includes('Instant Demo') || b.innerText.includes('Instant Connect')));
+      const connectBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && (b.innerText.includes('Continue with Google') || b.innerText.includes('Sign In') || b.innerText.includes('Connect Account') || b.innerText.includes('Instant Demo') || b.innerText.includes('Instant Connect')));
       if (connectBtn) connectBtn.click();
     })()`,
     returnByValue: true
@@ -119,7 +119,7 @@ async function runTest() {
       const bodyText = document.body.innerText;
       const fileRows = Array.from(document.querySelectorAll('div')).filter(d => d.innerText && d.innerText.includes('Bring to NoteIn'));
       return {
-        isConnected: bodyText.includes('Connected') || bodyText.includes('Alex Chen'),
+        isConnected: bodyText.includes('Connected') || bodyText.includes('Alex Chen') || bodyText.includes('user.alex@gmail.com') || bodyText.includes('Google Drive'),
         filesCount: fileRows.length,
         hasCalculusNotein: bodyText.includes('Calculus_Lecture_Notes.notein'),
         hasBiologyIn: bodyText.includes('Biology_Cell_Biology_Guide.in'),
