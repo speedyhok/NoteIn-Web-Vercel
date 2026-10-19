@@ -5,6 +5,8 @@
 import type { GoogleUser, Notebook, Page, Stroke, TextBox, NoteinPackage } from '../types';
 
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+export const DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+export const DRIVE_SCOPES = `${DRIVE_FILE_SCOPE} ${DRIVE_READONLY_SCOPE}`;
 
 const USER_STORAGE_KEY = 'notein_google_auth_user';
 const CLIENT_ID_STORAGE_KEY = 'notein_google_client_id';
@@ -306,7 +308,7 @@ export async function requestDriveAccessToken(forceConsent: boolean = false): Pr
     try {
       const tokenClient = window.google!.accounts.oauth2.initTokenClient({
         client_id: clientId,
-        scope: DRIVE_FILE_SCOPE,
+        scope: DRIVE_SCOPES,
         callback: (tokenResponse: google.accounts.oauth2.TokenResponse) => {
           if (tokenResponse.error) {
             const desc = tokenResponse.error_description || tokenResponse.error;
@@ -706,4 +708,58 @@ export async function fetchGoogleProfileFromApi(accessToken: string): Promise<Go
 
   saveGoogleUser(user);
   return user;
+}
+
+// ============================================================================
+// DIRECT GOOGLE DRIVE REST API FILE BROWSER (NO API KEY REQUIRED)
+// ============================================================================
+
+export async function listDriveFiles(searchTerm?: string): Promise<GooglePickedFile[]> {
+  let token: string;
+  try {
+    token = await requestDriveAccessToken();
+  } catch (err: any) {
+    throw new Error(`Google Drive authorization required: ${err?.message || err}`);
+  }
+
+  const queryParts = [
+    "trashed = false",
+    "mimeType != 'application/vnd.google-apps.folder'",
+  ];
+
+  if (searchTerm && searchTerm.trim()) {
+    const escaped = searchTerm.trim().replace(/['\"]/g, '');
+    queryParts.push(`name contains '${escaped}'`);
+  }
+
+  const q = queryParts.join(' and ');
+  const url = `https://www.googleapis.com/drive/v3/files?pageSize=50&fields=files(id,name,mimeType,size,modifiedTime,iconLink,webViewLink)&orderBy=modifiedTime desc&q=${encodeURIComponent(q)}`;
+
+  let res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (res.status === 401 || res.status === 403) {
+    // If permission insufficient or token expired, force re-authorization
+    token = await requestDriveAccessToken(true);
+    res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData?.error?.message || `Failed to fetch files from Google Drive (${res.status})`);
+  }
+
+  const data = await res.json();
+  return (data.files || []).map((f: any) => ({
+    id: f.id,
+    name: f.name,
+    mimeType: f.mimeType,
+    sizeBytes: f.size ? Number(f.size) : undefined,
+    lastEditedUtc: f.modifiedTime ? new Date(f.modifiedTime).getTime() : undefined,
+    iconUrl: f.iconLink,
+    url: f.webViewLink,
+  }));
 }
