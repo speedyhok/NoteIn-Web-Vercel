@@ -67,14 +67,22 @@ async function runTest() {
 
   // 1. Open Notebook from Library
   console.log('Opening notebook from library...');
-  await send('Runtime.evaluate', {
-    expression: `(() => {
-      const card = document.querySelector('.notebook-card') || document.querySelector('h3') || Array.from(document.querySelectorAll('div')).find(d => d.innerText && d.innerText.includes('Getting Started'));
-      if (card) card.click();
-      return true;
-    })()`
-  });
-  await wait(1200);
+  for (let i = 0; i < 20; i++) {
+    const clicked = await send("Runtime.evaluate", {
+      expression: `(() => {
+        const card = document.querySelector(".notebook-card") || Array.from(document.querySelectorAll("div")).find(d => d.innerText && d.innerText.includes("Getting Started"));
+        if (card) { card.click(); return true; }
+        return false;
+      })()`,
+      returnByValue: true
+    });
+    if (clicked && clicked.result && clicked.result.value) {
+      console.log("Notebook card clicked: true");
+      break;
+    }
+    await wait(300);
+  }
+  await wait(1500);
 
   // 2. Select Text Tool
   console.log('Selecting Text Tool...');

@@ -3,6 +3,10 @@ import type { Notebook, PaperTemplate } from '../../types';
 import { NotebookCard } from './NotebookCard';
 import { CreateNotebookModal } from './CreateNotebookModal';
 import { Modal } from '../common/Modal';
+import { GoogleDriveModal } from '../cloud/GoogleDriveModal';
+import { ImportDocumentModal } from './ImportDocumentModal';
+import { getGoogleUser } from '../../services/googleDriveService';
+import type { GoogleUser } from '../../types';
 import {
   Plus,
   Search,
@@ -11,6 +15,8 @@ import {
   Moon,
   Sparkles,
   ArrowUpDown,
+  Upload,
+  HardDrive,
 } from 'lucide-react';
 
 interface NotebookLibraryProps {
@@ -25,6 +31,7 @@ interface NotebookLibraryProps {
   ) => void;
   onRenameNotebook: (id: string, newTitle: string) => void;
   onDeleteNotebook: (id: string) => void;
+  onImportNotebook?: (notebook: Notebook) => void;
   isDarkMode: boolean;
   onToggleTheme: () => void;
 }
@@ -37,6 +44,7 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
   onCreateNotebook,
   onRenameNotebook,
   onDeleteNotebook,
+  onImportNotebook,
   isDarkMode,
   onToggleTheme,
 }) => {
@@ -47,6 +55,10 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
   const [editingNotebook, setEditingNotebook] = useState<Notebook | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [deletingNotebook, setDeletingNotebook] = useState<Notebook | null>(null);
+  const [isDriveOpen, setIsDriveOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [googleUser, setGoogleUser] = useState<GoogleUser | null>(() => getGoogleUser());
+
 
   // Filter & Sort
   const filteredNotebooks = useMemo(() => {
@@ -205,6 +217,66 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
                 onBlur={(e) => (e.target.style.borderColor = 'var(--border-subtle)')}
               />
             </div>
+
+            {/* Google Drive Cloud Sync Button */}
+            <button
+              onClick={() => {
+                setGoogleUser(getGoogleUser());
+                setIsDriveOpen(true);
+              }}
+              style={{
+                padding: "8px 14px",
+                borderRadius: "var(--radius-full)",
+                backgroundColor: googleUser ? "rgba(37, 99, 235, 0.1)" : "var(--bg-tertiary)",
+                border: googleUser ? "1px solid rgba(37, 99, 235, 0.3)" : "1px solid var(--border-subtle)",
+                color: googleUser ? "var(--accent-primary)" : "var(--text-secondary)",
+                fontSize: "13px",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                transition: "all 0.15s ease",
+              }}
+              title="Google Drive Cloud Sync & Login"
+            >
+              {googleUser ? (
+                <>
+                  <img
+                    src={googleUser.picture}
+                    alt={googleUser.name}
+                    style={{ width: "20px", height: "20px", borderRadius: "50%", objectFit: "cover" }}
+                  />
+                  <span>Google Drive</span>
+                  <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#16a34a" }} />
+                </>
+              ) : (
+                <>
+                  <HardDrive size={15} />
+                  <span>Google Drive</span>
+                </>
+              )}
+            </button>
+
+            {/* Upload & Import Document Button */}
+            <button
+              onClick={() => setIsImportOpen(true)}
+              style={{
+                padding: "8px 14px",
+                borderRadius: "var(--radius-full)",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-primary)",
+                fontSize: "13px",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+              title="Import PDF, NoteIn (.notein/.in), Images, or Markdown"
+            >
+              <Upload size={15} color="var(--accent-primary)" />
+              <span>Import</span>
+            </button>
 
             {/* Theme Switcher */}
             <button
@@ -479,6 +551,36 @@ export const NotebookLibrary: React.FC<NotebookLibraryProps> = ({
           Are you sure you want to permanently delete <strong>{deletingNotebook?.title}</strong>? All pages, handwriting, and text notes will be permanently removed.
         </p>
       </Modal>
+
+      {/* Google Drive Cloud Sync & Login Modal */}
+      <GoogleDriveModal
+        isOpen={isDriveOpen}
+        onClose={() => {
+          setIsDriveOpen(false);
+          setGoogleUser(getGoogleUser());
+        }}
+        onImportComplete={(imported) => {
+          if (onImportNotebook) {
+            onImportNotebook(imported);
+          } else {
+            onOpenNotebook(imported);
+          }
+        }}
+      />
+
+      {/* Upload & Import Document Modal */}
+      <ImportDocumentModal
+        isOpen={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
+        onImportSuccess={(imported) => {
+          if (onImportNotebook) {
+            onImportNotebook(imported);
+          } else {
+            onOpenNotebook(imported);
+          }
+        }}
+      />
+
     </div>
   );
 };

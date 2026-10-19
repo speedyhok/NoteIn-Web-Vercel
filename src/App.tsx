@@ -60,6 +60,12 @@ export function App() {
     await refreshNotebooks();
   };
 
+  const handleImportNotebook = async (importedNotebook: Notebook) => {
+    const loaded = await db.getNotebooks();
+    setNotebooks(loaded);
+    setActiveNotebook(importedNotebook);
+  };
+
   const handleBackToLibrary = async () => {
     setActiveNotebook(null);
     const loaded = await db.getNotebooks();
@@ -82,6 +88,7 @@ export function App() {
           onCreateNotebook={handleCreateNotebook}
           onRenameNotebook={handleRenameNotebook}
           onDeleteNotebook={handleDeleteNotebook}
+          onImportNotebook={handleImportNotebook}
           isDarkMode={isDarkMode}
           onToggleTheme={() => setIsDarkMode(!isDarkMode)}
         />

@@ -92,7 +92,15 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
     ctx.scale(dpr, dpr);
 
     renderPaperBackground(ctx, page.width, page.height, page.template, isDarkMode);
-  }, [page.width, page.height, page.template, isDarkMode]);
+
+    if (page.backgroundImage) {
+      const img = new Image();
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, page.width, page.height);
+      };
+      img.src = page.backgroundImage;
+    }
+  }, [page.width, page.height, page.template, isDarkMode, page.backgroundImage]);
 
   // Render Completed Vector Strokes
   useEffect(() => {

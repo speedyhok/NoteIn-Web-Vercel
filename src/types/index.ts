@@ -80,6 +80,7 @@ export interface Page {
   width: number;       // Standard A4: 794 (portrait) or 1123 (landscape)
   height: number;      // Standard A4: 1123 (portrait) or 794 (landscape)
   orientation: PageOrientation;
+  backgroundImage?: string;
   isUnbounded?: boolean;
   createdAt: number;
   updatedAt: number;
@@ -95,6 +96,8 @@ export interface Notebook {
   createdAt: number;
   updatedAt: number;
   pageCount: number;
+  importedFrom?: 'pdf' | 'notein' | 'drive' | 'image' | 'word' | 'markdown';
+  sourceFilename?: string;
 }
 
 export interface ViewportTransform {
@@ -119,3 +122,33 @@ export type HistoryAction =
   | { type: 'DELETE_TEXT_BOX'; textBox: TextBox }
   | { type: 'UPDATE_TEXT_BOX'; prev: TextBox; current: TextBox }
   | { type: 'CHANGE_TEMPLATE'; pageId: string; prevTemplate: PaperTemplate; nextTemplate: PaperTemplate };
+
+export interface GoogleUser {
+  id: string;
+  name: string;
+  email: string;
+  picture: string;
+  isDemo?: boolean;
+  accessToken?: string;
+}
+
+export interface GoogleDriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  modifiedTime: string;
+  iconUrl?: string;
+  description?: string;
+  content?: string;
+}
+
+export interface NoteinPackage {
+  version: "1.0" | "2.0";
+  app: "NoteIn";
+  exportedAt: number;
+  notebook: Notebook;
+  pages: Page[];
+  strokes: Stroke[];
+  textBoxes: TextBox[];
+}

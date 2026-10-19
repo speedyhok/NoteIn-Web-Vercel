@@ -4,6 +4,8 @@ import * as db from '../../db';
 import { fitPageToContainer, coverPageToContainer } from '../../engine/transform';
 import { detectCodeSnippet, highlightCodeToHtml } from '../../engine/syntaxHighlighter';
 import { HistoryManager } from '../../engine/history';
+import { exportNotebookAsNotein } from '../../services/documentImporter';
+import { uploadNotebookToGoogleDrive } from '../../services/googleDriveService';
 import { Toolbar } from './Toolbar';
 import { PaperCanvas } from './PaperCanvas';
 import { PageDrawer } from './PageDrawer';
@@ -470,6 +472,31 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     triggerAutosaveTextBoxes(currentPage.id, updatedList);
   };
 
+  const handleExportNotein = async () => {
+    try {
+      await exportNotebookAsNotein(notebook.id);
+    } catch (err) {
+      console.error("Export .notein failed:", err);
+    }
+  };
+
+  const handleBackupToDrive = async () => {
+    try {
+      const allStrokes: Stroke[] = [];
+      const allTextBoxes: TextBox[] = [];
+      for (const p of pages) {
+        const s = await db.getStrokesForPage(p.id);
+        const tb = await db.getTextBoxesForPage(p.id);
+        allStrokes.push(...s);
+        allTextBoxes.push(...tb);
+      }
+      await uploadNotebookToGoogleDrive(notebook, pages, allStrokes, allTextBoxes);
+      alert("✓ Notebook saved and backed up to Google Drive!");
+    } catch (err) {
+      console.error("Backup to Google Drive failed:", err);
+    }
+  };
+
   const handleDuplicateTextBox = (id?: string) => {
     const targetId = id || selectedTextBoxId;
     if (!targetId || !currentPage) return;
@@ -683,6 +710,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onInsertNumbered={handleInsertNumbered}
           onInsertCode={handleInsertCode}
           onDuplicateTextBox={handleDuplicateTextBox}
+          onExportNotein={handleExportNotein}
+          onBackupToDrive={handleBackupToDrive}
           pageOrientation={pageOrientation}
           onToggleOrientation={handleToggleOrientation}
           canUndo={canUndo}

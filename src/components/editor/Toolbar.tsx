@@ -32,6 +32,9 @@ import {
   List,
   ListOrdered,
   Code as CodeIcon,
+  Cloud,
+  HardDrive,
+  Download,
   Copy,
   RectangleHorizontal,
   RectangleVertical,
@@ -73,6 +76,8 @@ interface ToolbarProps {
   onInsertNumbered?: () => void;
   onInsertCode?: () => void;
   onDuplicateTextBox?: () => void;
+  onExportNotein?: () => void;
+  onBackupToDrive?: () => void;
   // Orientation
   pageOrientation: PageOrientation;
   onToggleOrientation: () => void;
@@ -150,6 +155,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onInsertNumbered,
   onInsertCode,
   onDuplicateTextBox,
+  onExportNotein,
+  onBackupToDrive,
   pageOrientation,
   onToggleOrientation,
   canUndo,
@@ -176,6 +183,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 }) => {
   const [colorOpen, setColorOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [widthOpen, setWidthOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
 
@@ -344,6 +352,94 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             <LayoutGrid size={15} />
           </button>
+
+          {/* Cloud & Export Action */}
+          {(onExportNotein || onBackupToDrive) && (
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setExportOpen(!exportOpen)}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--accent-primary)",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-subtle)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                }}
+                title="Cloud Backup & Export"
+              >
+                <Cloud size={14} />
+                <span>Cloud</span>
+              </button>
+
+              {exportOpen && (
+                <div
+                  className="glass-panel animate-scale-up"
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    right: 0,
+                    marginTop: "6px",
+                    borderRadius: "var(--radius-md)",
+                    padding: "6px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                    minWidth: "190px",
+                    zIndex: 60,
+                    boxShadow: "var(--glass-shadow)",
+                  }}
+                >
+                  {onBackupToDrive && (
+                    <button
+                      onClick={() => {
+                        setExportOpen(false);
+                        onBackupToDrive();
+                      }}
+                      style={{
+                        padding: "7px 10px",
+                        borderRadius: "var(--radius-sm)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        fontSize: "12px",
+                        color: "var(--text-primary)",
+                        justifyContent: "flex-start",
+                      }}
+                    >
+                      <HardDrive size={13} color="var(--accent-primary)" />
+                      Save to Google Drive
+                    </button>
+                  )}
+                  {onExportNotein && (
+                    <button
+                      onClick={() => {
+                        setExportOpen(false);
+                        onExportNotein();
+                      }}
+                      style={{
+                        padding: "7px 10px",
+                        borderRadius: "var(--radius-sm)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        fontSize: "12px",
+                        color: "var(--text-primary)",
+                        justifyContent: "flex-start",
+                      }}
+                    >
+                      <Download size={13} color="var(--accent-primary)" />
+                      Export .notein Package
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <button
             onClick={onToggleTheme}
