@@ -3,13 +3,14 @@ import type { GoogleUser, GoogleDriveFile, Notebook } from '../../types';
 import {
   getGoogleUser,
   signInWithGoogle,
-  signInWithCustomGoogleAccount,
+  signInWithGoogleAccessToken,
   requestGoogleOAuthToken,
   fetchGoogleProfileFromApi,
   signOutFromGoogle,
   listGoogleDriveFiles,
   fetchGoogleDriveFile,
   getSavedGoogleClientId,
+  saveGoogleClientId,
   isLiveGoogleDriveActive,
 } from '../../services/googleDriveService';
 import { importAnyDocument } from '../../services/documentImporter';
@@ -23,9 +24,9 @@ import {
   CheckCircle2,
   Loader2,
   Sparkles,
-  Eye,
-  EyeOff,
-  ChevronDown,
+  Key,
+  ExternalLink,
+  Shield,
   Download,
   Folder,
 } from 'lucide-react';
@@ -36,7 +37,7 @@ interface GoogleDriveModalProps {
   onImportComplete: (notebook: Notebook) => void;
 }
 
-type LoginStep = 'email' | 'password' | 'consent';
+type TabType = 'oauth' | 'token';
 
 export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
   isOpen,
@@ -50,13 +51,15 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
   const [importingFileId, setImportingFileId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Authentic Google Login Form State
-  const [step, setStep] = useState<LoginStep>('email');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [emailError, setEmailError] = useState<string | null>(null);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
+  // Tab State
+  const [activeTab, setActiveTab] = useState<TabType>('oauth');
+
+  // Real Google OAuth Client ID State
+  const [clientId, setClientId] = useState('');
+  const [showClientIdConfig, setShowClientIdConfig] = useState(false);
+
+  // Real Google Access Token State (Direct Live Drive)
+  const [accessTokenInput, setAccessTokenInput] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -64,12 +67,10 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     if (isOpen) {
       const u = getGoogleUser();
       setUser(u);
+      const savedClientId = getSavedGoogleClientId();
+      setClientId(savedClientId);
       if (u) {
         loadFiles();
-      } else {
-        setStep('email');
-        setEmailError(null);
-        setPasswordError(null);
       }
     }
   }, [isOpen]);
@@ -87,69 +88,60 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     }
   };
 
-  // Google Login Step 1: Validate Email & Go to Password
-  const handleEmailNext = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const cleanEmail = email.trim();
-    if (!cleanEmail) {
-      setEmailError('Enter an email or phone number');
-      return;
-    }
-    if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
-      setEmailError('Enter a valid email address');
+  // Launch Real Google OAuth 2.0 Popup Window (accounts.google.com)
+  const handleLaunchGooglePopup = async () => {
+    const effectiveClientId = clientId.trim() || getSavedGoogleClientId();
+    if (!effectiveClientId) {
+      setShowClientIdConfig(true);
+      setStatusMessage('Please enter your Google Cloud OAuth Client ID below to launch the official Google popup.');
       return;
     }
 
-    setEmailError(null);
+    saveGoogleClientId(effectiveClientId);
     setIsLoading(true);
+    setStatusMessage('Opening official Google OAuth popup (accounts.google.com)...');
 
-    // Realistic Google sign-in transition
-    setTimeout(() => {
-      setIsLoading(false);
-      setStep('password');
-    }, 400);
-  };
-
-  // Google Login Step 2: Validate Password & Go to OAuth Consent
-  const handlePasswordNext = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!password) {
-      setPasswordError('Enter a password');
-      return;
-    }
-    if (password.length < 4) {
-      setPasswordError('Wrong password. Try again or click Forgot password to reset it.');
-      return;
-    }
-
-    setPasswordError(null);
-    setIsLoading(true);
-
-    setTimeout(() => {
-      setIsLoading(false);
-      setStep('consent');
-    }, 450);
-  };
-
-  // Google Login Step 3: OAuth Consent Approval -> Complete Sign In
-  const handleConsentAllow = async () => {
-    setIsLoading(true);
     try {
-      const displayName = email.split('@')[0].replace(/[._]/g, ' ');
-      const formattedName = displayName.charAt(0).toUpperCase() + displayName.slice(1);
-      const u = await signInWithCustomGoogleAccount(email, formattedName, password);
+      const token = await requestGoogleOAuthToken(effectiveClientId);
+      const u = await fetchGoogleProfileFromApi(token);
       setUser(u);
-      setStatusMessage(`✓ Signed in as ${u.email}`);
-      setTimeout(() => setStatusMessage(null), 3000);
+      setStatusMessage(`✓ Signed in with Google as ${u.name}! Live Drive connected.`);
+      setTimeout(() => setStatusMessage(null), 3500);
       await loadFiles();
     } catch (err: any) {
-      setStatusMessage(`Sign-in error: ${err.message}`);
+      console.error('Real Google OAuth error:', err);
+      setStatusMessage(`Google OAuth: ${err.message || 'Popup was closed or cancelled'}`);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Quick Demo Login (for instant testing)
+  // Connect Real Google Drive via Access Token (from Google OAuth Playground)
+  const handleConnectAccessToken = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!accessTokenInput.trim()) {
+      setStatusMessage('Please enter a Google OAuth Access Token');
+      return;
+    }
+
+    setIsLoading(true);
+    setStatusMessage('Connecting to Google Drive API (googleapis.com)...');
+
+    try {
+      const u = await signInWithGoogleAccessToken(accessTokenInput.trim());
+      setUser(u);
+      setStatusMessage(`✓ Connected to live Google Drive as ${u.name}!`);
+      setTimeout(() => setStatusMessage(null), 3500);
+      await loadFiles();
+    } catch (err: any) {
+      console.error('Access token error:', err);
+      setStatusMessage(`Token Error: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Instant Demo Workspace (for offline testing)
   const handleInstantDemoLogin = async () => {
     setIsLoading(true);
     try {
@@ -165,31 +157,10 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     }
   };
 
-  // Official Google OAuth Popup Window
-  const handleOfficialPopup = async () => {
-    setIsLoading(true);
-    setStatusMessage('Opening official Google Sign-In popup...');
-    try {
-      const clientId = getSavedGoogleClientId();
-      const token = await requestGoogleOAuthToken(clientId);
-      const u = await fetchGoogleProfileFromApi(token);
-      setUser(u);
-      setStatusMessage(`✓ Authenticated with Google as ${u.name}!`);
-      setTimeout(() => setStatusMessage(null), 3000);
-      await loadFiles();
-    } catch (err: any) {
-      setStatusMessage(err.message || 'Popup closed');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleSignOut = async () => {
     await signOutFromGoogle();
     setUser(null);
-    setStep('email');
-    setEmail('');
-    setPassword('');
+    setFiles([]);
     setStatusMessage('Signed out of Google.');
     setTimeout(() => setStatusMessage(null), 2500);
   };
@@ -303,8 +274,8 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        backdropFilter: 'blur(3px)',
+        backgroundColor: 'rgba(0, 0, 0, 0.55)',
+        backdropFilter: 'blur(4px)',
         zIndex: 1000,
         display: 'flex',
         alignItems: 'center',
@@ -316,27 +287,27 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       }}
     >
       {/* =========================================================================
-          VIEW 1: AUTHENTIC GOOGLE SIGN-IN CARD (When user is NOT signed in)
+          VIEW 1: REAL GOOGLE AUTHENTICATION CARD (When user is NOT signed in)
          ========================================================================= */}
       {!user ? (
         <div
           style={{
             position: 'relative',
             width: '100%',
-            maxWidth: '448px',
-            backgroundColor: '#ffffff',
-            borderRadius: '28px',
-            padding: '36px 36px 32px 36px',
-            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.16)',
-            border: '1px solid #dadce0',
-            fontFamily: "'Google Sans', Roboto, Arial, sans-serif",
-            color: '#1f1f1f',
+            maxWidth: '480px',
+            backgroundColor: 'var(--bg-primary)',
+            borderRadius: '24px',
+            padding: '32px 32px 28px 32px',
+            boxShadow: '0 12px 40px rgba(0, 0, 0, 0.2)',
+            border: '1px solid var(--border-subtle)',
+            fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
+            color: 'var(--text-primary)',
           }}
         >
-          {/* Google Indeterminate Progress Bar */}
+          {/* Linear Progress Bar */}
           {isLoading && <div className="google-linear-progress" />}
 
-          {/* Close X */}
+          {/* Close Button */}
           <button
             onClick={onClose}
             style={{
@@ -345,7 +316,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
               right: '18px',
               border: 'none',
               background: 'transparent',
-              color: '#5f6368',
+              color: 'var(--text-secondary)',
               cursor: 'pointer',
               padding: '6px',
               borderRadius: '50%',
@@ -358,391 +329,279 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
             <X size={18} />
           </button>
 
-          {/* Google Multi-Color "G" Icon */}
-          <div style={{ marginBottom: '16px' }}>
-            <svg width="40" height="40" viewBox="0 0 24 24">
+          {/* Official Google Header */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+            <svg width="36" height="36" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
               <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
               <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
               <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
             </svg>
+            <div>
+              <h2 style={{ fontSize: '20px', fontWeight: 600, margin: 0, color: 'var(--text-primary)' }}>
+                Sign in with Google
+              </h2>
+              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                Connect real Google Drive to NoteIn
+              </span>
+            </div>
           </div>
 
-          {/* ---------------- STEP 1: EMAIL IDENTIFIER ---------------- */}
-          {step === 'email' && (
-            <form onSubmit={handleEmailNext} style={{ display: 'flex', flexDirection: 'column' }}>
-              <h1 style={{ fontSize: '24px', fontWeight: 400, margin: 0, color: '#1f1f1f' }}>
-                Sign in
-              </h1>
-              <p style={{ fontSize: '15px', color: '#444746', margin: '6px 0 26px 0' }}>
-                to continue to NoteIn
+          {/* Security Notice */}
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: '8px',
+              backgroundColor: 'rgba(59, 130, 246, 0.08)',
+              border: '1px solid rgba(59, 130, 246, 0.2)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+              fontSize: '12px',
+              lineHeight: 1.4,
+              color: 'var(--text-secondary)',
+              marginBottom: '18px',
+            }}
+          >
+            <Shield size={16} color="var(--accent-primary)" style={{ flexShrink: 0, marginTop: '2px' }} />
+            <span>
+              <strong>Real Google Authentication:</strong> Google requires all logins to occur inside Google's official OAuth popup on <code>accounts.google.com</code>.
+            </span>
+          </div>
+
+          {/* Mode Switch Tabs */}
+          <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '8px', marginBottom: '16px' }}>
+            <button
+              type="button"
+              onClick={() => setActiveTab('oauth')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-full)',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: 'none',
+                backgroundColor: activeTab === 'oauth' ? 'var(--accent-light)' : 'transparent',
+                color: activeTab === 'oauth' ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                cursor: 'pointer',
+              }}
+            >
+              Official Google Popup (OAuth)
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('token')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-full)',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: 'none',
+                backgroundColor: activeTab === 'token' ? 'var(--accent-light)' : 'transparent',
+                color: activeTab === 'token' ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                cursor: 'pointer',
+              }}
+            >
+              Direct Google Access Token
+            </button>
+          </div>
+
+          {/* TAB 1: Real Google OAuth Popup */}
+          {activeTab === 'oauth' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                Click below to launch Google's official authentication popup window (hosted directly on <code>accounts.google.com</code>):
               </p>
 
-              {/* Material Outline Input */}
-              <div className={`google-outline-input ${emailError ? 'error' : ''}`}>
-                <span className="google-outline-label">Email or phone</span>
-                <input
-                  type="email"
-                  autoFocus
-                  placeholder="name@gmail.com"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    if (emailError) setEmailError(null);
-                  }}
-                  style={{
-                    width: '100%',
-                    border: 'none',
-                    outline: 'none',
-                    fontSize: '15px',
-                    color: '#1f1f1f',
-                    backgroundColor: 'transparent',
-                  }}
-                />
-              </div>
+              {/* Official Google Branded Button */}
+              <button
+                type="button"
+                onClick={handleLaunchGooglePopup}
+                disabled={isLoading}
+                style={{
+                  width: '100%',
+                  padding: '12px 18px',
+                  borderRadius: 'var(--radius-full)',
+                  backgroundColor: '#ffffff',
+                  color: '#3c4043',
+                  border: '1px solid #dadce0',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '12px',
+                  boxShadow: '0 2px 4px rgba(60,64,67,0.12)',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8f9fa')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ffffff')}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                </svg>
+                {isLoading ? <Loader2 size={16} className="animate-spin" /> : 'Launch Official Google Sign-In Popup'}
+              </button>
 
-              {emailError && (
-                <span style={{ fontSize: '12px', color: '#b3261e', marginTop: '4px' }}>
-                  {emailError}
-                </span>
-              )}
-
-              <div style={{ marginTop: '8px', marginBottom: '24px' }}>
+              {/* Toggle Google Cloud OAuth Client ID configuration */}
+              <div style={{ marginTop: '4px' }}>
                 <button
                   type="button"
+                  onClick={() => setShowClientIdConfig(!showClientIdConfig)}
                   style={{
                     border: 'none',
                     background: 'transparent',
-                    color: '#0b57d0',
-                    fontSize: '13px',
+                    color: 'var(--accent-primary)',
+                    fontSize: '12px',
                     fontWeight: 500,
                     cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
                     padding: 0,
                   }}
                 >
-                  Forgot email?
-                </button>
-              </div>
-
-              <p style={{ fontSize: '13px', color: '#444746', lineHeight: 1.5, margin: '0 0 28px 0' }}>
-                To continue, Google will share your name, email address, and profile picture with NoteIn.
-              </p>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <button
-                  type="button"
-                  onClick={handleInstantDemoLogin}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: '#0b57d0',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    padding: '8px 12px',
-                    borderRadius: '4px',
-                  }}
-                >
-                  Instant Demo
+                  <Key size={12} />
+                  {showClientIdConfig ? 'Hide Google Cloud Client ID settings' : 'Configure Google Cloud OAuth Client ID'}
                 </button>
 
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  style={{
-                    backgroundColor: '#0b57d0',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '20px',
-                    padding: '10px 26px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                >
-                  {isLoading ? <Loader2 size={14} className="animate-spin" /> : 'Next'}
-                </button>
-              </div>
-
-              {/* Subtle Official Popup alternative */}
-              <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #e0e2ec', textAlign: 'center' }}>
-                <button
-                  type="button"
-                  onClick={handleOfficialPopup}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: '#5f6368',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Or open official Google browser popup
-                </button>
-              </div>
-            </form>
-          )}
-
-          {/* ---------------- STEP 2: PASSWORD ---------------- */}
-          {step === 'password' && (
-            <form onSubmit={handlePasswordNext} style={{ display: 'flex', flexDirection: 'column' }}>
-              <h1 style={{ fontSize: '24px', fontWeight: 400, margin: 0, color: '#1f1f1f' }}>
-                Welcome
-              </h1>
-
-              {/* User Account Chip (Clicking goes back to change email) */}
-              <div style={{ marginTop: '8px', marginBottom: '24px' }}>
-                <button
-                  type="button"
-                  onClick={() => setStep('email')}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '4px 10px 4px 6px',
-                    borderRadius: '16px',
-                    border: '1px solid #dadce0',
-                    backgroundColor: '#ffffff',
-                    color: '#3c4043',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                  }}
-                  title="Switch account"
-                >
+                {showClientIdConfig && (
                   <div
                     style={{
-                      width: '20px',
-                      height: '20px',
-                      borderRadius: '50%',
-                      backgroundColor: '#1d4ed8',
-                      color: '#fff',
-                      fontSize: '11px',
-                      fontWeight: 600,
+                      marginTop: '10px',
+                      padding: '12px',
+                      backgroundColor: 'var(--bg-secondary)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-subtle)',
                       display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
+                      flexDirection: 'column',
+                      gap: '8px',
                     }}
                   >
-                    {email.charAt(0).toUpperCase()}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 600 }}>Google OAuth Client ID:</span>
+                      <a
+                        href="https://console.cloud.google.com/apis/credentials"
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '2px' }}
+                      >
+                        Google Cloud Console <ExternalLink size={10} />
+                      </a>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="xxxx.apps.googleusercontent.com"
+                      value={clientId}
+                      onChange={(e) => setClientId(e.target.value)}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border-subtle)',
+                        fontSize: '12px',
+                        outline: 'none',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                      }}
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Set Authorized JavaScript origin to: <code>{window.location.origin}</code>
+                    </span>
                   </div>
-                  <span>{email}</span>
-                  <ChevronDown size={14} color="#5f6368" />
-                </button>
-              </div>
-
-              {/* Material Password Input */}
-              <div className={`google-outline-input ${passwordError ? 'error' : ''}`}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span className="google-outline-label">Enter your password</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#5f6368', padding: 0 }}
-                  >
-                    {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                  </button>
-                </div>
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  autoFocus
-                  placeholder="Password"
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (passwordError) setPasswordError(null);
-                  }}
-                  style={{
-                    width: '100%',
-                    border: 'none',
-                    outline: 'none',
-                    fontSize: '15px',
-                    color: '#1f1f1f',
-                    backgroundColor: 'transparent',
-                  }}
-                />
-              </div>
-
-              {passwordError && (
-                <span style={{ fontSize: '12px', color: '#b3261e', marginTop: '4px' }}>
-                  {passwordError}
-                </span>
-              )}
-
-              {/* Show Password Checkbox */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px', marginBottom: '24px' }}>
-                <input
-                  type="checkbox"
-                  id="showPasswordCheck"
-                  checked={showPassword}
-                  onChange={(e) => setShowPassword(e.target.checked)}
-                  style={{ cursor: 'pointer', accentColor: '#0b57d0' }}
-                />
-                <label htmlFor="showPasswordCheck" style={{ fontSize: '13px', color: '#444746', cursor: 'pointer' }}>
-                  Show password
-                </label>
-              </div>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px' }}>
-                <button
-                  type="button"
-                  onClick={() => setStep('email')}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: '#0b57d0',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    padding: '8px 12px',
-                  }}
-                >
-                  Forgot password?
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  style={{
-                    backgroundColor: '#0b57d0',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '20px',
-                    padding: '10px 26px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                >
-                  {isLoading ? <Loader2 size={14} className="animate-spin" /> : 'Next'}
-                </button>
-              </div>
-            </form>
-          )}
-
-          {/* ---------------- STEP 3: GOOGLE OAUTH PERMISSIONS CONSENT ---------------- */}
-          {step === 'consent' && (
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <h1 style={{ fontSize: '22px', fontWeight: 400, margin: 0, color: '#1f1f1f' }}>
-                NoteIn wants to access your Google Account
-              </h1>
-
-              {/* User Account Chip */}
-              <div style={{ marginTop: '8px', marginBottom: '20px' }}>
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '3px 10px 3px 5px',
-                    borderRadius: '16px',
-                    backgroundColor: '#f1f3f4',
-                    color: '#3c4043',
-                    fontSize: '12px',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: '18px',
-                      height: '18px',
-                      borderRadius: '50%',
-                      backgroundColor: '#1d4ed8',
-                      color: '#fff',
-                      fontSize: '10px',
-                      fontWeight: 600,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    {email.charAt(0).toUpperCase()}
-                  </div>
-                  {email}
-                </span>
-              </div>
-
-              <p style={{ fontSize: '13px', fontWeight: 500, color: '#1f1f1f', margin: '0 0 12px 0' }}>
-                This will allow NoteIn to:
-              </p>
-
-              {/* Permissions list */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                  <svg width="20" height="20" viewBox="0 0 87.3 78" style={{ flexShrink: 0, marginTop: '2px' }}>
-                    <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
-                    <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
-                    <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
-                    <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
-                    <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h55.5c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
-                    <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
-                  </svg>
-                  <span style={{ fontSize: '13px', color: '#444746', lineHeight: 1.4 }}>
-                    See and download all your Google Drive files (PDFs, .notein packages, and documents)
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                  <div style={{ width: '20px', display: 'flex', justifyContent: 'center', marginTop: '2px', color: '#5f6368' }}>
-                    <Sparkles size={16} />
-                  </div>
-                  <span style={{ fontSize: '13px', color: '#444746', lineHeight: 1.4 }}>
-                    Save NoteIn notebooks and vector sketches to your personal cloud storage
-                  </span>
-                </div>
-              </div>
-
-              <p style={{ fontSize: '12px', color: '#5f6368', lineHeight: 1.4, margin: '0 0 24px 0', borderTop: '1px solid #e0e2ec', paddingTop: '12px' }}>
-                Make sure you trust NoteIn. You may be sharing sensitive info with this app.
-              </p>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <button
-                  type="button"
-                  onClick={() => setStep('email')}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: '#0b57d0',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    padding: '8px 16px',
-                  }}
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleConsentAllow}
-                  disabled={isLoading}
-                  style={{
-                    backgroundColor: '#0b57d0',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '20px',
-                    padding: '10px 28px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                >
-                  {isLoading ? <Loader2 size={14} className="animate-spin" /> : 'Allow'}
-                </button>
+                )}
               </div>
             </div>
           )}
+
+          {/* TAB 2: Direct Google Drive Access Token */}
+          {activeTab === 'token' && (
+            <form onSubmit={handleConnectAccessToken} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                Generate a live token from <a href="https://developers.google.com/oauthplayground" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-primary)', textDecoration: 'underline' }}>Google OAuth 2.0 Playground</a> (Scope: <code>https://www.googleapis.com/auth/drive.readonly</code>) and paste it below:
+              </p>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  type="password"
+                  placeholder="Paste Google Access Token (ya29...)"
+                  value={accessTokenInput}
+                  onChange={(e) => setAccessTokenInput(e.target.value)}
+                  style={{
+                    flex: 1,
+                    padding: '9px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-subtle)',
+                    fontSize: '12px',
+                    backgroundColor: 'var(--bg-secondary)',
+                    color: 'var(--text-primary)',
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  style={{
+                    padding: '9px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--accent-primary)',
+                    color: '#ffffff',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    border: 'none',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Connect Real Drive
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Status Message Banner */}
+          {statusMessage && (
+            <div
+              style={{
+                marginTop: '16px',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                backgroundColor: statusMessage.includes('Error') || statusMessage.includes('failed') ? 'rgba(239, 68, 68, 0.12)' : 'rgba(22, 163, 74, 0.12)',
+                color: statusMessage.includes('Error') || statusMessage.includes('failed') ? '#dc2626' : '#16a34a',
+                fontSize: '12px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <CheckCircle2 size={13} />
+              {statusMessage}
+            </div>
+          )}
+
+          {/* Bottom Row with Instant Demo for testing */}
+          <div style={{ marginTop: '20px', paddingTop: '14px', borderTop: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              Offline / Demo Testing:
+            </span>
+            <button
+              type="button"
+              onClick={handleInstantDemoLogin}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+              }}
+            >
+              Instant Demo Workspace
+            </button>
+          </div>
         </div>
       ) : (
         /* =========================================================================
