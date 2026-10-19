@@ -97,15 +97,22 @@ async function runTest() {
   });
   await wait(600);
 
-  // Click Sign In with Google
-  console.log('Clicking Sign in with Google...');
-  await send('Runtime.evaluate', {
+  // Click Connect Account with custom Google ID
+  console.log("Entering personal Google ID & Connecting Account...");
+  await send("Runtime.evaluate", {
     expression: `(() => {
-      const signInBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && b.innerText.includes('Sign In with Google'));
-      if (signInBtn) signInBtn.click();
-    })()`
+      const emailInput = document.querySelector('input[type="email"]');
+      if (emailInput) {
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(emailInput, 'user.alex@gmail.com');
+        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      const connectBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && (b.innerText.includes('Connect Account') || b.innerText.includes('Instant Demo') || b.innerText.includes('Instant Connect')));
+      if (connectBtn) connectBtn.click();
+    })()`,
+    returnByValue: true
   });
-  await wait(800);
+  await wait(900);
 
   const driveModalState = await send('Runtime.evaluate', {
     expression: `(() => {

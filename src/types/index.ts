@@ -130,6 +130,9 @@ export interface GoogleUser {
   picture: string;
   isDemo?: boolean;
   accessToken?: string;
+  hasPassword?: boolean;
+  authType?: 'oauth' | 'custom' | 'token';
+  isLiveDrive?: boolean;
 }
 
 export interface GoogleDriveFile {

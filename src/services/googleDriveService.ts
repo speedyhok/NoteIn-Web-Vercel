@@ -1,14 +1,14 @@
 // Google Drive Cloud Sync & Google Identity Service for NoteIn Web
-// Replicates the cloud synchronization and backup architecture decompiled from NoteIn APK (NetDiskAuthorizeActivity)
+// Supports Official Google OAuth 2.0 (GIS), Live Google Drive API v3, Custom Account Credentials, Access Tokens, and Cloud Backup
 
-import type { GoogleUser, GoogleDriveFile, Notebook, Page, Stroke, TextBox, NoteinPackage } from '../types';
+import type { GoogleUser, GoogleDriveFile, Notebook, Page, Stroke, TextBox, NoteinPackage, PaperTemplate } from '../types';
 
 const USER_STORAGE_KEY = 'notein_google_user';
 const DRIVE_FILES_STORAGE_KEY = 'notein_drive_files';
 const CLIENT_ID_STORAGE_KEY = 'notein_google_client_id';
 
-// Default pre-seeded NoteIn documents available in Google Drive
-const INITIAL_DEMO_DRIVE_FILES: GoogleDriveFile[] = [
+// Default pre-seeded NoteIn documents available for demonstration and offline testing
+export const INITIAL_DEMO_DRIVE_FILES: GoogleDriveFile[] = [
   {
     id: 'drive_file_calculus_notein',
     name: 'Calculus_Lecture_Notes.notein',
@@ -68,31 +68,33 @@ function generateSampleNoteinContent(filename: string): NoteinPackage {
       pageId: page1Id,
       toolType: 'pen',
       penStyle: 'fountain',
-      color: isCalculus ? '#1d4ed8' : '#059669',
-      width: 4.0,
+      color: '#1d4ed8',
+      width: 4,
       opacity: 1.0,
       points: [
-        { x: 120, y: 140, pressure: 0.5 },
-        { x: 140, y: 142, pressure: 0.7 },
-        { x: 170, y: 141, pressure: 0.8 },
-        { x: 210, y: 139, pressure: 0.6 },
+        { x: 120, y: 140, pressure: 0.5, time: now - 5000 },
+        { x: 160, y: 135, pressure: 0.7, time: now - 4800 },
+        { x: 230, y: 145, pressure: 0.8, time: now - 4500 },
+        { x: 300, y: 140, pressure: 0.4, time: now - 4200 },
       ],
-      bounds: { minX: 118, minY: 138, maxX: 212, maxY: 144 },
-      createdAt: now - 10000,
+      bounds: { minX: 120, minY: 135, maxX: 300, maxY: 145 },
+      createdAt: now - 5000,
     },
     {
       id: crypto.randomUUID(),
       pageId: page1Id,
       toolType: 'highlighter',
+      penStyle: 'ballpoint',
       color: '#facc15',
-      width: 22,
+      width: 18,
       opacity: 0.4,
       points: [
-        { x: 110, y: 140, pressure: 0.5 },
-        { x: 290, y: 140, pressure: 0.5 },
+        { x: 110, y: 180, pressure: 0.4, time: now - 3500 },
+        { x: 280, y: 180, pressure: 0.4, time: now - 3200 },
+        { x: 420, y: 180, pressure: 0.4, time: now - 2800 },
       ],
-      bounds: { minX: 108, minY: 128, maxX: 292, maxY: 152 },
-      createdAt: now - 9000,
+      bounds: { minX: 110, minY: 180, maxX: 420, maxY: 180 },
+      createdAt: now - 3500,
     },
   ];
 
@@ -100,29 +102,18 @@ function generateSampleNoteinContent(filename: string): NoteinPackage {
     {
       id: crypto.randomUUID(),
       pageId: page1Id,
-      x: 100,
-      y: 190,
+      x: 110,
+      y: 195,
       width: 580,
       height: 160,
       content: isCalculus
-        ? `<h3 style="color: rgb(30, 58, 138); margin: 0 0 8px 0;">Differential Calculus & Taylor Expansions</h3>
-<p style="margin: 0 0 6px 0;">Imported seamlessly from <strong>Google Drive</strong> cloud storage.</p>
-<ul style="padding-left: 20px; margin: 4px 0;">
-  <li><strong>Theorem 1:</strong> Continuous differentiability implies local linearity</li>
-  <li><strong>Application:</strong> Gradient descent in high-dimensional feature spaces</li>
-</ul>
-<div style="background-color: #f0fdf4; border-left: 4px solid #16a34a; padding: 6px 10px; border-radius: 4px; font-size: 13px; color: #166534;">
-  ✓ Synced with Google Drive Cloud Backup.
-</div>`
+        ? '<h3>Taylor Series & Differential Approximations</h3><p>Let <code>f(x)</code> be infinitely differentiable at <i>x = a</i>. The polynomial is defined as:</p><p style="color: #2563eb; font-weight: bold;">P(x) = f(a) + f\'(a)(x-a) + f\'\'(a)/2! (x-a)^2 + ...</p>'
         : isBiology
-        ? `<h3 style="color: rgb(5, 150, 105); margin: 0 0 8px 0;">Cellular Mitochondria & Energy Cycles</h3>
-<p style="margin: 0 0 6px 0;">Study guide imported from <strong>Google Drive</strong> archive.</p>
-<p style="color: rgb(220, 38, 38); font-weight: 600;">Key Exam Concept: ATP synthesis via chemiosmosis across inner membrane.</p>`
-        : `<h3 style="color: rgb(79, 70, 229); margin: 0 0 8px 0;">${cleanTitle}</h3>
-<p>Document brought from <strong>Google Drive</strong> into NoteIn Studio Web.</p>`,
+        ? '<h3>Mitochondrial ATP Synthesis Pathway</h3><p>Oxidative phosphorylation generates <b>30-32 ATP molecules</b> per glucose molecule via the inner mitochondrial membrane proton gradient.</p>'
+        : '<h3>Executive Strategic Goals</h3><p>Synchronize cross-platform vector notes with cloud storage via Google Drive.</p>',
+      fontSize: 15,
       fontFamily: 'Inter, sans-serif',
-      fontSize: 16,
-      color: '#1e293b',
+      color: '#1f2937',
       bold: false,
       italic: false,
       alignment: 'left',
@@ -131,6 +122,14 @@ function generateSampleNoteinContent(filename: string): NoteinPackage {
     },
   ];
 
+  const template: PaperTemplate = {
+    type: isBiology ? 'cornell' : 'ruled',
+    lineSpacing: 28,
+    gridSize: 20,
+    patternColor: '#d0d7de',
+    bgColor: '#ffffff',
+  };
+
   return {
     version: '2.0',
     app: 'NoteIn',
@@ -138,15 +137,9 @@ function generateSampleNoteinContent(filename: string): NoteinPackage {
     notebook: {
       id: notebookId,
       title: cleanTitle,
-      coverColor: isCalculus ? '#1d4ed8' : isBiology ? '#059669' : '#7c3aed',
-      coverPattern: 'marble',
-      defaultTemplate: {
-        type: isBiology ? 'cornell' : 'ruled',
-        lineSpacing: 28,
-        gridSize: 20,
-        patternColor: '#d0d7de',
-        bgColor: '#ffffff',
-      },
+      coverColor: isCalculus ? '#2563eb' : isBiology ? '#16a34a' : '#9333ea',
+      coverPattern: 'gradient',
+      defaultTemplate: template,
       orientation: 'portrait',
       importedFrom: 'drive',
       sourceFilename: filename,
@@ -160,13 +153,7 @@ function generateSampleNoteinContent(filename: string): NoteinPackage {
         notebookId,
         pageNumber: 1,
         title: 'Page 1',
-        template: {
-          type: isBiology ? 'cornell' : 'ruled',
-          lineSpacing: 28,
-          gridSize: 20,
-          patternColor: '#d0d7de',
-          bgColor: '#ffffff',
-        },
+        template,
         width: 794,
         height: 1123,
         orientation: 'portrait',
@@ -210,9 +197,168 @@ export function getGoogleUser(): GoogleUser | null {
 }
 
 /**
- * Signs in with Google.
- * If user has configured a custom Google Client ID and Google Identity Services is available,
- * initiates OAuth token client; otherwise signs in with instant interactive account.
+ * Checks whether live Google Drive sync is currently connected (via OAuth or Access Token).
+ */
+export function isLiveGoogleDriveActive(): boolean {
+  const user = getGoogleUser();
+  return Boolean(user && user.accessToken && user.isLiveDrive);
+}
+
+/**
+ * Initiates the official Google OAuth 2.0 login popup via Google Identity Services (GIS).
+ * Opens accounts.google.com where the user logs in with their real Google ID & password.
+ */
+export async function requestGoogleOAuthToken(clientId?: string): Promise<string> {
+  const effectiveClientId = clientId || getSavedGoogleClientId();
+  if (!effectiveClientId) {
+    throw new Error('Please enter your Google Cloud OAuth Client ID below to launch the official Google login popup.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const google = (window as any).google;
+    if (!google || !google.accounts || !google.accounts.oauth2) {
+      reject(new Error('Google Identity Services library is not loaded. Please ensure you are connected to the internet.'));
+      return;
+    }
+
+    try {
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: effectiveClientId,
+        scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
+        callback: (response: any) => {
+          if (response.error) {
+            reject(new Error(response.error_description || response.error));
+          } else if (response.access_token) {
+            resolve(response.access_token);
+          } else {
+            reject(new Error('No access token returned from Google authentication'));
+          }
+        },
+        error_callback: (err: any) => {
+          reject(err);
+        },
+      });
+
+      client.requestAccessToken({ prompt: 'consent' });
+    } catch (err: any) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Fetches user profile from Google's official userinfo API with active access token.
+ */
+export async function fetchGoogleProfileFromApi(accessToken: string): Promise<GoogleUser> {
+  const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Google API responded with HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  const user: GoogleUser = {
+    id: data.sub || 'google_' + Date.now(),
+    name: data.name || data.email,
+    email: data.email,
+    picture: data.picture || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(data.name || data.email)}&backgroundColor=1d4ed8`,
+    isDemo: false,
+    accessToken,
+    authType: 'oauth',
+    isLiveDrive: true,
+  };
+  localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+  return user;
+}
+
+/**
+ * Signs in using a direct Google Access Token (e.g. from Google OAuth Playground or GCP).
+ * Connects directly to the user's live Google Drive.
+ */
+export async function signInWithGoogleAccessToken(token: string): Promise<GoogleUser> {
+  const cleanToken = token.trim();
+  if (!cleanToken) {
+    throw new Error('Please enter a valid Google OAuth Access Token');
+  }
+
+  try {
+    const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${cleanToken}` },
+    });
+
+    let user: GoogleUser;
+    if (profileRes.ok) {
+      const data = await profileRes.json();
+      user = {
+        id: data.sub || 'google_' + Date.now(),
+        name: data.name || data.email,
+        email: data.email,
+        picture: data.picture || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(data.name || data.email)}&backgroundColor=1d4ed8`,
+        isDemo: false,
+        accessToken: cleanToken,
+        authType: 'token',
+        isLiveDrive: true,
+      };
+    } else {
+      // Test drive access directly if userinfo scope was omitted
+      const driveRes = await fetch('https://www.googleapis.com/drive/v3/about?fields=user', {
+        headers: { Authorization: `Bearer ${cleanToken}` },
+      });
+      if (driveRes.ok) {
+        const driveData = await driveRes.json();
+        user = {
+          id: driveData.user?.permissionId || 'google_' + Date.now(),
+          name: driveData.user?.displayName || 'Google Drive User',
+          email: driveData.user?.emailAddress || 'drive.user@google.com',
+          picture: driveData.user?.photoLink || `https://api.dicebear.com/7.x/initials/svg?seed=Drive&backgroundColor=1d4ed8`,
+          isDemo: false,
+          accessToken: cleanToken,
+          authType: 'token',
+          isLiveDrive: true,
+        };
+      } else {
+        throw new Error('Invalid or expired Google Access Token. Please verify token permissions (needs drive.readonly or drive.file).');
+      }
+    }
+
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+    return user;
+  } catch (err: any) {
+    throw new Error(err.message || 'Failed to authenticate with Google Access Token');
+  }
+}
+
+/**
+ * Signs in using custom Google Account credentials (user's own real email, display name, and optional local vault password).
+ */
+export async function signInWithCustomGoogleAccount(
+  email: string,
+  name?: string,
+  password?: string
+): Promise<GoogleUser> {
+  const cleanEmail = email.trim();
+  const cleanName = name && name.trim() ? name.trim() : cleanEmail.split('@')[0];
+
+  const user: GoogleUser = {
+    id: 'google_' + cleanEmail.replace(/[^a-zA-Z0-9]/g, '_'),
+    name: cleanName,
+    email: cleanEmail,
+    picture: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}&backgroundColor=1d4ed8`,
+    isDemo: false,
+    hasPassword: Boolean(password && password.length > 0),
+    authType: 'custom',
+    isLiveDrive: false,
+  };
+
+  localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+  if (password) {
+    localStorage.setItem(`notein_vault_pass_${user.id}`, password);
+  }
+  return user;
+}
+
+/**
+ * Signs in with Google (demo or custom user).
  */
 export async function signInWithGoogle(customUser?: Partial<GoogleUser>): Promise<GoogleUser> {
   const user: GoogleUser = {
@@ -222,6 +368,8 @@ export async function signInWithGoogle(customUser?: Partial<GoogleUser>): Promis
     picture: customUser?.picture || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face',
     isDemo: customUser?.isDemo ?? true,
     accessToken: customUser?.accessToken,
+    authType: customUser?.authType || 'custom',
+    isLiveDrive: Boolean(customUser?.accessToken),
   };
 
   localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
@@ -237,8 +385,41 @@ export async function signOutFromGoogle(): Promise<void> {
 
 /**
  * Lists NoteIn documents and files in Google Drive.
+ * If user has an active OAuth / Access token, queries real Google Drive API v3.
  */
 export async function listGoogleDriveFiles(): Promise<GoogleDriveFile[]> {
+  const user = getGoogleUser();
+
+  // If user has a live OAuth access token, fetch real files from Google Drive API
+  if (user && user.accessToken) {
+    try {
+      const url = `https://www.googleapis.com/drive/v3/files?pageSize=50&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime)&q=${encodeURIComponent('trashed = false')}&orderBy=modifiedTime desc`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${user.accessToken}` },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.files && data.files.length > 0) {
+          return data.files.map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType,
+            size: parseInt(f.size || '0', 10),
+            modifiedTime: f.modifiedTime || new Date().toISOString(),
+            description: `Live Google Drive (${f.mimeType.split('/').pop() || f.mimeType})`,
+          }));
+        }
+        return [];
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn('Real Google Drive API query error:', errJson);
+      }
+    } catch (err) {
+      console.warn('Real Google Drive API query error, falling back to local files:', err);
+    }
+  }
+
   try {
     const raw = localStorage.getItem(DRIVE_FILES_STORAGE_KEY);
     if (raw) {
@@ -259,6 +440,32 @@ export async function fetchGoogleDriveFile(fileId: string): Promise<{
   filename: string;
   mimeType: string;
 }> {
+  const user = getGoogleUser();
+
+  // If live OAuth token and not a mock drive ID, download from live Google Drive API
+  if (user && user.accessToken && !fileId.startsWith('drive_file_') && !fileId.startsWith('drive_')) {
+    try {
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+        headers: { Authorization: `Bearer ${user.accessToken}` },
+      });
+      if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        const data = contentType.includes('application/json') || contentType.includes('text/')
+          ? await res.text()
+          : await res.arrayBuffer();
+        const files = await listGoogleDriveFiles();
+        const target = files.find((f) => f.id === fileId);
+        return {
+          data,
+          filename: target?.name || 'downloaded_from_drive.notein',
+          mimeType: target?.mimeType || 'application/octet-stream',
+        };
+      }
+    } catch (err) {
+      console.warn('Failed live download from Google Drive API:', err);
+    }
+  }
+
   const files = await listGoogleDriveFiles();
   const file = files.find((f) => f.id === fileId);
   if (!file) {
@@ -294,7 +501,6 @@ export async function fetchGoogleDriveFile(fileId: string): Promise<{
     };
   }
 
-  // Return empty string fallback
   return {
     data: '',
     filename: file.name,
