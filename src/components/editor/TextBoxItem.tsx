@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { TextBox } from '../../types';
 import { Trash2, GripHorizontal, Edit3, Copy } from 'lucide-react';
+import { detectCodeSnippet, highlightCodeToHtml } from '../../engine/syntaxHighlighter';
 
 interface TextBoxItemProps {
   textBox: TextBox;
@@ -27,9 +28,25 @@ function isHtml(str: string): boolean {
 function formatContentForDisplay(raw: string): string {
   if (!raw) return '';
   if (raw === 'Click to edit...' || raw === 'Click to edit') return '';
+
+  // If contains HTML tags
   if (isHtml(raw)) {
+    // Check if raw contains embedded markdown code blocks ```...```
+    if (raw.includes('```')) {
+      const codeRegex = /```([a-zA-Z0-9_-]*)\r?\n([\s\S]+?)\r?\n?```/g;
+      return raw.replace(codeRegex, (_, lang, code) => {
+        return highlightCodeToHtml(code.trim(), lang || 'code');
+      });
+    }
     return raw;
   }
+
+  // If plain text, check if it is a code snippet
+  const codeDetect = detectCodeSnippet(raw);
+  if (codeDetect.isCode) {
+    return highlightCodeToHtml(codeDetect.cleanedCode, codeDetect.language);
+  }
+
   // Convert plain text: escape special characters, preserve tabs and line breaks
   return raw
     .replace(/&/g, '&amp;')
@@ -39,18 +56,91 @@ function formatContentForDisplay(raw: string): string {
     .replace(/\r?\n/g, '<br>');
 }
 
-// Clean and sanitize HTML from clipboard while preserving rich formatting
+// Clean and sanitize HTML from clipboard while preserving ALL colors, fonts, styles, code blocks & formatting
 function sanitizeClipboardHtml(rawHtml: string): string {
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(rawHtml, 'text/html');
 
-    // Remove potentially malicious or disruptive tags
-    doc.querySelectorAll('script, iframe, object, embed, meta, link, applet, head').forEach((el) => el.remove());
+    // Remove potentially malicious or dangerous tags
+    doc.querySelectorAll('script, iframe, object, embed, applet, head meta, head link').forEach((el) => el.remove());
 
-    // Unwrap <html> and <body> tags if present
+    // 1. INLINE CSS from <style> tags (crucial for Google Docs, Word, Apple Notes, GitHub, Wikipedia)
+    // Google Docs & Word output rules like: .c0 { color: #d9381e; font-weight: 700; font-size: 14pt; }
+    const styles = Array.from(doc.querySelectorAll('style'));
+    styles.forEach((styleEl) => {
+      const cssText = styleEl.textContent || '';
+      const ruleRegex = /([^{]+)\{([^}]+)\}/g;
+      let match: RegExpExecArray | null;
+      while ((match = ruleRegex.exec(cssText)) !== null) {
+        const selector = match[1].trim();
+        const styleBody = match[2].trim();
+        if (selector.startsWith('@')) continue; // Skip @page, @media, @keyframes
+        try {
+          const elements = doc.querySelectorAll(selector);
+          elements.forEach((el) => {
+            if (el instanceof HTMLElement) {
+              const existing = el.getAttribute('style') || '';
+              // Prepend so that inline styles on the element keep higher precedence
+              el.setAttribute('style', `${styleBody}; ${existing}`);
+            }
+          });
+        } catch {
+          // Ignore invalid or unsupported pseudo selectors
+        }
+      }
+      styleEl.remove();
+    });
+
+    // 2. Convert legacy <font> tags to modern styled spans with colors
+    doc.querySelectorAll('font').forEach((fontEl) => {
+      const color = fontEl.getAttribute('color');
+      const size = fontEl.getAttribute('size');
+      const face = fontEl.getAttribute('face');
+      const span = doc.createElement('span');
+      let style = fontEl.getAttribute('style') || '';
+      if (color) style += `color: ${color};`;
+      if (face) style += `font-family: ${face};`;
+      if (size) {
+        const sizeMap: Record<string, string> = {
+          '1': '10px', '2': '13px', '3': '16px', '4': '18px', '5': '24px', '6': '32px', '7': '48px'
+        };
+        style += `font-size: ${sizeMap[size] || size};`;
+      }
+      span.setAttribute('style', style);
+      span.innerHTML = fontEl.innerHTML;
+      fontEl.replaceWith(span);
+    });
+
+    // 3. Enhance <pre> and <code> blocks if not already wrapped in .notein-code-card
+    doc.querySelectorAll('pre').forEach((preEl) => {
+      if (preEl.closest('.notein-code-card')) return;
+      const codeChild = preEl.querySelector('code');
+      const textToHighlight = codeChild ? codeChild.textContent || '' : preEl.textContent || '';
+      const detected = detectCodeSnippet(textToHighlight);
+      if (detected.isCode || textToHighlight.includes('\n') || preEl.tagName === 'PRE') {
+        const highlighted = highlightCodeToHtml(textToHighlight, detected.language || 'code');
+        const temp = doc.createElement('div');
+        temp.innerHTML = highlighted;
+        if (temp.firstElementChild) {
+          preEl.replaceWith(temp.firstElementChild);
+        }
+      }
+    });
+
+    // 4. Check if the body itself contains a code snippet without rich formatting
     const body = doc.body;
-    return body ? body.innerHTML : rawHtml;
+    if (body) {
+      const hasColoredSpans = body.querySelector('[style*="color"], [style*="background"], strong, b, em, i, u, table');
+      const rawText = body.textContent || '';
+      const codeDetect = detectCodeSnippet(rawText);
+      if (!hasColoredSpans && codeDetect.isCode) {
+        return highlightCodeToHtml(codeDetect.cleanedCode, codeDetect.language);
+      }
+      return body.innerHTML;
+    }
+
+    return rawHtml;
   } catch {
     return rawHtml;
   }
@@ -103,15 +193,15 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     setContent(clean);
   }, [textBox.content]);
 
-  // Measure and auto-expand dimensions to fit rich content
+  // Measure and auto-expand dimensions to fit rich content, code cards, and tables
   const autoExpandDimensions = useCallback((el: HTMLElement) => {
-    // el.scrollWidth measures rendered width of long lines, tables, headings
+    // el.scrollWidth measures rendered width of long lines, tables, code cards
     const measuredW = el.scrollWidth;
-    const neededWidth = Math.min(1050, Math.max(textBox.width, Math.ceil(measuredW + 36)));
+    const neededWidth = Math.min(1200, Math.max(textBox.width, Math.ceil(measuredW + 40)));
 
-    // el.scrollHeight measures rendered height of all paragraphs, lists, and breaks
+    // el.scrollHeight measures rendered height of all paragraphs, lists, and code blocks
     const measuredH = el.scrollHeight;
-    const neededHeight = Math.max(textBox.height, Math.ceil(measuredH + 20));
+    const neededHeight = Math.max(textBox.height, Math.ceil(measuredH + 24));
 
     if (neededWidth !== textBox.width || neededHeight !== textBox.height) {
       onUpdateSize(neededWidth, neededHeight);
@@ -303,7 +393,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     }
   };
 
-  // Handle Paste: preserve exact formatting (rich text HTML or plain text) and auto-expand
+  // Handle Paste: preserve exact formatting (rich text HTML, inlined colors, code blocks, or plain text) and auto-expand
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -317,7 +407,12 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     if (htmlData && htmlData.trim()) {
       htmlToInsert = sanitizeClipboardHtml(htmlData);
     } else if (textData) {
-      htmlToInsert = formatContentForDisplay(textData);
+      const codeDetect = detectCodeSnippet(textData);
+      if (codeDetect.isCode) {
+        htmlToInsert = highlightCodeToHtml(codeDetect.cleanedCode, codeDetect.language);
+      } else {
+        htmlToInsert = formatContentForDisplay(textData);
+      }
     }
 
     if (!htmlToInsert) return;

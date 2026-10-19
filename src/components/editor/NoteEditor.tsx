@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { Notebook, Page, Stroke, TextBox, ToolType, ViewportTransform, PaperTemplate, PageOrientation } from '../../types';
 import * as db from '../../db';
 import { fitPageToContainer, coverPageToContainer } from '../../engine/transform';
+import { detectCodeSnippet, highlightCodeToHtml } from '../../engine/syntaxHighlighter';
 import { HistoryManager } from '../../engine/history';
 import { Toolbar } from './Toolbar';
 import { PaperCanvas } from './PaperCanvas';
@@ -427,6 +428,31 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     triggerAutosaveTextBoxes(currentPage.id, updatedList);
   };
 
+  const handleInsertCode = () => {
+    if (!selectedTextBoxId || !currentPage) return;
+    const target = textBoxes.find((t) => t.id === selectedTextBoxId);
+    if (!target) return;
+
+    let codeToHighlight = target.content;
+    if (!codeToHighlight || codeToHighlight === "Click to edit..." || codeToHighlight === "Click to edit") {
+      codeToHighlight = "// Sample Code\nfunction calculateStats(items: number[]) {\n  const total = items.reduce((acc, curr) => acc + curr, 0);\n  return { total, count: items.length };\n}";
+    }
+    const detected = detectCodeSnippet(codeToHighlight);
+    const highlightedCard = highlightCodeToHtml(detected.cleanedCode || codeToHighlight, detected.language || "typescript");
+
+    const updatedBox: TextBox = {
+      ...target,
+      content: highlightedCard,
+      width: Math.max(target.width, 480),
+      height: Math.max(target.height, 160),
+      updatedAt: Date.now(),
+    };
+    const updatedList = textBoxes.map((t) => (t.id === selectedTextBoxId ? updatedBox : t));
+    setTextBoxes(updatedList);
+    historyRef.current.push({ type: "UPDATE_TEXT_BOX", prev: target, current: updatedBox });
+    triggerAutosaveTextBoxes(currentPage.id, updatedList);
+  };
+
   const handleInsertNumbered = () => {
     if (!selectedTextBoxId || !currentPage) return;
     const target = textBoxes.find((t) => t.id === selectedTextBoxId);
@@ -655,6 +681,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onChangeTextBg={handleChangeTextBg}
           onInsertBullet={handleInsertBullet}
           onInsertNumbered={handleInsertNumbered}
+          onInsertCode={handleInsertCode}
           onDuplicateTextBox={handleDuplicateTextBox}
           pageOrientation={pageOrientation}
           onToggleOrientation={handleToggleOrientation}

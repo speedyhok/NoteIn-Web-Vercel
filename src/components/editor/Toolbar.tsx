@@ -31,6 +31,7 @@ import {
   AlignJustify,
   List,
   ListOrdered,
+  Code as CodeIcon,
   Copy,
   RectangleHorizontal,
   RectangleVertical,
@@ -70,6 +71,7 @@ interface ToolbarProps {
   onChangeTextBg?: (bg: string) => void;
   onInsertBullet?: () => void;
   onInsertNumbered?: () => void;
+  onInsertCode?: () => void;
   onDuplicateTextBox?: () => void;
   // Orientation
   pageOrientation: PageOrientation;
@@ -146,6 +148,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onChangeTextBg,
   onInsertBullet,
   onInsertNumbered,
+  onInsertCode,
   onDuplicateTextBox,
   pageOrientation,
   onToggleOrientation,
@@ -650,6 +653,19 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 title="Insert Numbered List"
               >
                 <ListOrdered size={13} />
+              </button>
+            )}
+            {onInsertCode && (
+              <button
+                onClick={onInsertCode}
+                style={{
+                  padding: "5px 6px",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--text-secondary)",
+                }}
+                title="Insert / Format Code Block"
+              >
+                <CodeIcon size={13} />
               </button>
             )}
 
