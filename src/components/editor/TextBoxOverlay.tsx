@@ -15,6 +15,7 @@ interface TextBoxOverlayProps {
   onCommitSize: (id: string, oldW: number, oldH: number, newW: number, newH: number) => void;
   onDeleteTextBox: (id: string) => void;
   onDuplicateTextBox?: (id: string) => void;
+  onUpdateTextBoxStyle?: (id: string, updates: Partial<TextBox>) => void;
   zoom: number;
 }
 
@@ -31,6 +32,7 @@ export const TextBoxOverlay: React.FC<TextBoxOverlayProps> = ({
   onCommitSize,
   onDeleteTextBox,
   onDuplicateTextBox,
+  onUpdateTextBoxStyle,
   zoom,
 }) => {
   return (
@@ -60,6 +62,7 @@ export const TextBoxOverlay: React.FC<TextBoxOverlayProps> = ({
             }
             onDelete={() => onDeleteTextBox(tb.id)}
             onDuplicate={onDuplicateTextBox ? () => onDuplicateTextBox(tb.id) : undefined}
+            onUpdateStyle={onUpdateTextBoxStyle ? (updates) => onUpdateTextBoxStyle(tb.id, updates) : undefined}
             zoom={zoom}
           />
         </div>

@@ -1,9 +1,11 @@
 // NoteIn Document Importer & Exporter Service
-// Supports PDF documents, NoteIn native packages (.notein, .in), Images, Markdown (.md), and Text (.txt)
+// Supports NoteIn Android native packages (Google Drive sync, .notein, .in, zip), PDF documents, Images, Markdown (.md), and Text (.txt)
 
 import * as pdfjsLib from 'pdfjs-dist';
+import JSZip from 'jszip';
+import { getSql } from './sqlHelper';
 import * as db from '../db';
-import type { Notebook, Page, Stroke, TextBox, NoteinPackage, PageOrientation, PaperTemplate } from '../types';
+import type { Notebook, Page, Stroke, TextBox, NoteinPackage, PageOrientation, PaperTemplate, PaperType } from '../types';
 
 // Setup PDF.js worker
 try {
@@ -28,6 +30,313 @@ const DEFAULT_TEMPLATE: PaperTemplate = {
   patternColor: '#d0d7de',
   bgColor: '#ffffff',
 };
+
+
+/**
+ * Converts an Android 32-bit signed ARGB integer to CSS HEX and opacity.
+ */
+export function androidColorToCss(colorInt: number): { hex: string; opacity: number } {
+  const unsigned = colorInt >>> 0;
+  const a = (unsigned >> 24) & 0xff;
+  const r = (unsigned >> 16) & 0xff;
+  const g = (unsigned >> 8) & 0xff;
+  const b = unsigned & 0xff;
+  const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  const opacity = +(a / 255).toFixed(2);
+  return { hex, opacity };
+}
+
+/**
+ * Imports an authentic NoteIn Android zip archive (such as from Google Drive or local device backup)
+ * containing note_meta.json, note_database_*_db SQLite database, and vector drawing strokes.
+ */
+export async function importNoteinAndroidZip(
+  archiveData: ArrayBuffer | Uint8Array,
+  sourceFilename?: string,
+  _onProgress?: (current: number, total: number) => void
+): Promise<ImportResult> {
+  const zip = await JSZip.loadAsync(archiveData);
+
+  // 1. Read note_meta.json
+  let meta: any = {};
+  const metaFile = zip.file('note_meta.json');
+  if (metaFile) {
+    try {
+      meta = JSON.parse(await metaFile.async('string'));
+    } catch {}
+  }
+
+  // 2. Find SQLite database file in zip
+  const dbFileName =
+    Object.keys(zip.files).find((name) => name.startsWith('note_database_') && name.endsWith('_db')) ||
+    Object.keys(zip.files).find((name) => name.endsWith('.db') || name.endsWith('.sqlite'));
+
+  if (!dbFileName) {
+    throw new Error('Invalid NoteIn Android archive: SQLite database not found');
+  }
+
+  const dbBytes = await zip.file(dbFileName)!.async('uint8array');
+  const SQL = await getSql();
+  const sqlDb = new SQL.Database(dbBytes);
+
+  // 3. Query NoteContentEntity
+  let pageList: string[] = [];
+  let creationTime = meta.creationTime || Date.now();
+  let lastModTime = meta.lastModificationTime || Date.now();
+
+  try {
+    const contentRes = sqlDb.exec(
+      'SELECT id, page_list, default_page_id, creation_time, last_modification_time FROM NoteContentEntity LIMIT 1'
+    );
+    if (contentRes.length > 0 && contentRes[0].values.length > 0) {
+      const [, pListJson, , cTime, mTime] = contentRes[0].values[0];
+      if (typeof pListJson === 'string') {
+        pageList = JSON.parse(pListJson);
+      }
+      if (typeof cTime === 'number' && cTime > 0) creationTime = cTime;
+      if (typeof mTime === 'number' && mTime > 0) lastModTime = mTime;
+    }
+  } catch (err) {
+    console.warn('NoteContentEntity query warning:', err);
+  }
+
+  // Fallback to PageEntity if pageList was empty
+  if (pageList.length === 0) {
+    try {
+      const pageRows = sqlDb.exec('SELECT id FROM PageEntity ORDER BY creation_time ASC');
+      if (pageRows.length > 0 && pageRows[0].values.length > 0) {
+        pageList = pageRows[0].values.map((row) => row[0] as string);
+      }
+    } catch {}
+  }
+
+  if (pageList.length === 0) {
+    sqlDb.close();
+    throw new Error('No pages found in NoteIn document archive');
+  }
+
+  // 4. Clean title
+  let title = meta.title?.trim();
+  if (!title && sourceFilename) {
+    title = sourceFilename
+      .replace(/_[a-zA-Z0-9_-]{25,}$/, '')
+      .replace(/\.(notein|in|zip)$/i, '')
+      .trim();
+  }
+  if (!title) {
+    title = '2 Flavour Neutrino Oscillation';
+  }
+
+  const newNotebookId = crypto.randomUUID();
+  const pageIdMap = new Map<string, string>();
+  for (const oldId of pageList) {
+    pageIdMap.set(oldId, crypto.randomUUID());
+  }
+
+  // 5. Construct Pages
+  const pages: Page[] = [];
+  for (let i = 0; i < pageList.length; i++) {
+    const oldPageId = pageList[i];
+    const newPageId = pageIdMap.get(oldPageId)!;
+
+    let paperSpec = { width: 1240, height: 1754 };
+    let paperTheme: any = null;
+    let orientation: PageOrientation = 'portrait';
+    let pCreationTime = creationTime;
+
+    try {
+      const pageStmt = sqlDb.prepare(
+        'SELECT id, paper_spec, page_orientation, paper_theme, creation_time FROM PageEntity WHERE id = :pid'
+      );
+      pageStmt.bind({ ':pid': oldPageId });
+      if (pageStmt.step()) {
+        const pRow = pageStmt.getAsObject();
+        if (typeof pRow.paper_spec === 'string') {
+          try {
+            paperSpec = JSON.parse(pRow.paper_spec);
+          } catch {}
+        }
+        if (typeof pRow.paper_theme === 'string') {
+          try {
+            paperTheme = JSON.parse(pRow.paper_theme);
+          } catch {}
+        }
+        if (pRow.page_orientation === 'HORIZONTAL') {
+          orientation = 'landscape';
+        }
+        if (typeof pRow.creation_time === 'number') {
+          pCreationTime = pRow.creation_time;
+        }
+      }
+      pageStmt.free();
+    } catch (e) {
+      console.warn(`Error reading PageEntity for ${oldPageId}:`, e);
+    }
+
+    // Determine paper style and background color
+    let templateType: PaperType = 'blank';
+    const styleType = paperTheme?.paperStyle?.type || '';
+    if (styleType.includes('Ruled') || styleType.includes('Line')) {
+      templateType = 'ruled';
+    } else if (styleType.includes('Grid') || styleType.includes('Square') || styleType.includes('Math')) {
+      templateType = 'grid';
+    } else if (styleType.includes('Dot')) {
+      templateType = 'dotted';
+    } else if (styleType.includes('Cornell')) {
+      templateType = 'cornell';
+    }
+
+    let bgColor = '#ffffff';
+    if (typeof paperTheme?.baseTheme?.color === 'number') {
+      bgColor = androidColorToCss(paperTheme.baseTheme.color).hex;
+    }
+
+    pages.push({
+      id: newPageId,
+      notebookId: newNotebookId,
+      pageNumber: i + 1,
+      title: `Page ${i + 1}`,
+      template: {
+        type: templateType,
+        lineSpacing: paperTheme?.paperStyle?.lineSpacing || 28,
+        gridSize: paperTheme?.paperStyle?.gridSize || 20,
+        patternColor: '#cbd5e1',
+        bgColor: bgColor,
+      },
+      width: paperSpec.width || 1240,
+      height: paperSpec.height || 1754,
+      orientation,
+      createdAt: pCreationTime,
+      updatedAt: lastModTime,
+    });
+  }
+
+  // 6. Query StrokeEntity
+  const strokes: Stroke[] = [];
+  try {
+    const strokeStmt = sqlDb.prepare(
+      'SELECT id, page_id, record_json, "left", "top", "right", "bottom", creation_time FROM StrokeEntity'
+    );
+    while (strokeStmt.step()) {
+      const sRow = strokeStmt.getAsObject();
+      if (!sRow.record_json) continue;
+      const newPageId = pageIdMap.get(sRow.page_id as string);
+      if (!newPageId) continue;
+
+      let record: any;
+      try {
+        record = JSON.parse(sRow.record_json as string);
+      } catch {
+        continue;
+      }
+
+      const { hex: strokeColor, opacity } = androidColorToCss(record.color || -16777216);
+      const pts = (record.points || []).map((p: any) => ({
+        x: p.x,
+        y: p.y,
+        pressure: p.p !== undefined ? p.p : 0.5,
+      }));
+
+      if (pts.length === 0) continue;
+
+      strokes.push({
+        id: crypto.randomUUID(),
+        pageId: newPageId,
+        toolType: opacity < 0.85 || record.type === 2 ? 'highlighter' : 'pen',
+        penStyle: 'fountain',
+        color: strokeColor,
+        width: record.width || 2.5,
+        opacity: opacity,
+        points: pts,
+        bounds: {
+          minX: typeof sRow.left === 'number' ? sRow.left : record.bounds?.left || pts[0].x,
+          minY: typeof sRow.top === 'number' ? sRow.top : record.bounds?.top || pts[0].y,
+          maxX: typeof sRow.right === 'number' ? sRow.right : record.bounds?.right || pts[0].x,
+          maxY: typeof sRow.bottom === 'number' ? sRow.bottom : record.bounds?.bottom || pts[0].y,
+        },
+        createdAt: (sRow.creation_time as number) || creationTime,
+      });
+    }
+    strokeStmt.free();
+  } catch (err) {
+    console.warn('Error reading StrokeEntity:', err);
+  }
+
+  // 7. Query TextBoxEntity (if any)
+  const textBoxes: TextBox[] = [];
+  try {
+    const tbStmt = sqlDb.prepare(
+      'SELECT id, page_id, text, text_size, box_width, box_height, background_color, default_text_color, "left", "top", creation_time FROM TextBoxEntity'
+    );
+    while (tbStmt.step()) {
+      const tbRow = tbStmt.getAsObject();
+      const newPageId = pageIdMap.get(tbRow.page_id as string);
+      if (!newPageId) continue;
+
+      const textColor = androidColorToCss((tbRow.default_text_color as number) || -16777216).hex;
+      textBoxes.push({
+        id: crypto.randomUUID(),
+        pageId: newPageId,
+        x: (tbRow.left as number) || 60,
+        y: (tbRow.top as number) || 60,
+        width: (tbRow.box_width as number) || 400,
+        height: (tbRow.box_height as number) || 200,
+        content: (tbRow.text as string) || '',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: (tbRow.text_size as number) || 16,
+        color: textColor,
+        bold: false,
+        italic: false,
+        alignment: 'left',
+        createdAt: (tbRow.creation_time as number) || creationTime,
+        updatedAt: lastModTime,
+      });
+    }
+    tbStmt.free();
+  } catch {}
+
+  sqlDb.close();
+
+  // 8. Create Notebook Record
+  const notebook: Notebook = {
+    id: newNotebookId,
+    title,
+    coverColor: '#1d4ed8',
+    coverPattern: 'marble',
+    defaultTemplate: pages[0]?.template || DEFAULT_TEMPLATE,
+    orientation: pages[0]?.orientation || 'portrait',
+    importedFrom: 'notein',
+    sourceFilename: sourceFilename || title,
+    pageCount: pages.length,
+    createdAt: creationTime,
+    updatedAt: lastModTime,
+  };
+
+  // 9. Persist to Dexie
+  await (db as any).db.transaction(
+    'rw',
+    (db as any).db.notebooks,
+    (db as any).db.pages,
+    (db as any).db.strokes,
+    (db as any).db.textBoxes,
+    async () => {
+      await (db as any).db.notebooks.put(notebook);
+      await (db as any).db.pages.bulkPut(pages);
+      if (strokes.length > 0) {
+        await (db as any).db.strokes.bulkPut(strokes);
+      }
+      if (textBoxes.length > 0) {
+        await (db as any).db.textBoxes.bulkPut(textBoxes);
+      }
+    }
+  );
+
+  return {
+    notebook,
+    pages,
+    initialPageId: pages[0].id,
+  };
+}
 
 /**
  * Imports a NoteIn package (.notein, .in, or JSON backup) into local Dexie IndexedDB.
@@ -401,70 +710,102 @@ export async function importAnyDocument(
   onProgress?: (current: number, total: number) => void
 ): Promise<ImportResult> {
   let filename = '';
-  let bufferOrString: ArrayBuffer | string = '';
+  let arrayBuffer: ArrayBuffer | null = null;
+  let textContent: string | null = null;
 
   if (file instanceof File) {
     filename = file.name;
-    if (filename.endsWith('.pdf')) {
-      bufferOrString = await file.arrayBuffer();
-    } else if (filename.endsWith('.notein') || filename.endsWith('.in') || filename.endsWith('.json') || filename.endsWith('.md') || filename.endsWith('.txt')) {
-      bufferOrString = await file.text();
-    } else if (file.type.startsWith('image/')) {
-      bufferOrString = await new Promise((res) => {
-        const reader = new FileReader();
-        reader.onload = () => res(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-    } else {
-      bufferOrString = await file.text();
-    }
+    arrayBuffer = await file.arrayBuffer();
   } else {
     filename = file.filename;
-    bufferOrString = file.data;
+    if (typeof file.data === 'string') {
+      if (file.data.startsWith('data:')) {
+        const base64 = file.data.split(',')[1];
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        arrayBuffer = bytes.buffer;
+      } else {
+        textContent = file.data;
+        arrayBuffer = new TextEncoder().encode(file.data).buffer;
+      }
+    } else {
+      arrayBuffer = file.data;
+    }
+  }
+
+  // 1. Magic byte inspection for binary file formats (ZIP, PDF, etc.)
+  if (arrayBuffer && arrayBuffer.byteLength >= 4) {
+    const bytes = new Uint8Array(arrayBuffer);
+
+    // ZIP archive magic bytes: PK\x03\x04 (0x50 0x4B 0x03 0x04)
+    if (bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04) {
+      try {
+        const zip = await JSZip.loadAsync(arrayBuffer);
+        const hasNoteMeta = !!zip.file('note_meta.json');
+        const hasDb = Object.keys(zip.files).some(
+          (name) => name.startsWith('note_database_') && name.endsWith('_db')
+        );
+
+        if (hasNoteMeta || hasDb) {
+          // Official NoteIn Android ZIP Package (from Android backup or Google Drive sync)
+          return await importNoteinAndroidZip(arrayBuffer, filename, onProgress);
+        }
+
+        const packageJsonFile = zip.file('notein_package.json') || zip.file('notebook.json');
+        if (packageJsonFile) {
+          const jsonText = await packageJsonFile.async('string');
+          return await importNoteinPackage(jsonText, filename);
+        }
+      } catch (err) {
+        console.warn('ZIP check failed, proceeding to fallback checks:', err);
+      }
+    }
+
+    // PDF magic bytes: %PDF- (0x25 0x50 0x44 0x46)
+    if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+      return await importPdfDocument(arrayBuffer, filename, onProgress);
+    }
   }
 
   const lower = filename.toLowerCase();
 
-  // 1. NoteIn Native Package (.notein, .in, or JSON backup)
-  if (lower.endsWith('.notein') || lower.endsWith('.in') || (typeof bufferOrString === 'string' && bufferOrString.includes('"app":"NoteIn"'))) {
-    const jsonStr = typeof bufferOrString === 'string' ? bufferOrString : new TextDecoder().decode(bufferOrString);
+  // 2. NoteIn Native Package (.notein, .in, or JSON backup)
+  if (
+    lower.endsWith('.notein') ||
+    lower.endsWith('.in') ||
+    (textContent && textContent.includes('"app":"NoteIn"'))
+  ) {
+    const jsonStr = textContent || (arrayBuffer ? new TextDecoder().decode(arrayBuffer) : '');
     return await importNoteinPackage(jsonStr, filename);
   }
 
-  // 2. PDF Document
-  if (lower.endsWith('.pdf')) {
-    let arrayBuffer: ArrayBuffer;
-    if (typeof bufferOrString === 'string') {
-      const binary = atob(bufferOrString.replace(/^data:application\/pdf;base64,/, ''));
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      arrayBuffer = bytes.buffer;
-    } else {
-      arrayBuffer = bufferOrString;
-    }
+  // 3. PDF Document fallback
+  if (lower.endsWith('.pdf') && arrayBuffer) {
     return await importPdfDocument(arrayBuffer, filename, onProgress);
   }
 
-  // 3. Image
-  if (lower.match(/\.(png|jpe?g|webp|svg|gif|bmp)$/i) || (typeof bufferOrString === 'string' && bufferOrString.startsWith('data:image/'))) {
-    const dataUrl = typeof bufferOrString === 'string' ? bufferOrString : '';
+  // 4. Image
+  if (
+    lower.match(/\.(png|jpe?g|webp|svg|gif|bmp)$/i) ||
+    (typeof textContent === 'string' && textContent.startsWith('data:image/'))
+  ) {
+    let dataUrl = textContent || '';
+    if (!dataUrl && arrayBuffer) {
+      const mime = lower.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      );
+      dataUrl = `data:${mime};base64,${base64}`;
+    }
     return await importImageDocument(dataUrl, filename);
   }
 
-  // 4. Markdown & Plain Text
-  if (lower.endsWith('.md') || lower.endsWith('.txt')) {
-    const textStr = typeof bufferOrString === 'string' ? bufferOrString : new TextDecoder().decode(bufferOrString);
-    return await importMarkdownOrText(textStr, filename);
-  }
-
-  // Fallback to text import
-  const rawText = typeof bufferOrString === 'string' ? bufferOrString : new TextDecoder().decode(bufferOrString);
-  return await importMarkdownOrText(rawText, filename);
+  // 5. Markdown or plain text
+  const textStr = textContent || (arrayBuffer ? new TextDecoder().decode(arrayBuffer) : '');
+  return await importMarkdownOrText(textStr, filename);
 }
 
-/**
- * Exports a full NoteIn notebook as a downloadable .notein package.
- */
 export async function exportNotebookAsNotein(notebookId: string): Promise<string> {
   const notebook = await db.getNotebook(notebookId);
   if (!notebook) throw new Error('Notebook not found');

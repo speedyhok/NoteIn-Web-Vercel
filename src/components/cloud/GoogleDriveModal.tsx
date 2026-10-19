@@ -1,33 +1,35 @@
+// Official Google Identity Services & Google Drive Picker Modal
+// Supports Real Google Sign-In, Live Google Drive Picker (drive.file scope), and Document Import
+
 import React, { useState, useEffect, useRef } from 'react';
-import type { GoogleUser, GoogleDriveFile, Notebook } from '../../types';
+import type { GoogleUser, Notebook } from '../../types';
 import {
   getGoogleUser,
-  signInWithCustomGoogleAccount,
-  requestGoogleOAuthToken,
-  fetchGoogleProfileFromApi,
-  signInWithGoogleAccessToken,
   signOutFromGoogle,
-  listGoogleDriveFiles,
-  fetchGoogleDriveFile,
-  getSavedGoogleClientId,
-  saveGoogleClientId,
-  isLiveGoogleDriveActive,
+  initializeGoogleIdentity,
+  renderGoogleSignInButton,
+  openGoogleDrivePicker,
+  downloadDriveFile,
+  getCredentialStatus,
+  saveUserGoogleCredentials,
+  clearUserGoogleCredentials,
+  type GooglePickedFile,
 } from '../../services/googleDriveService';
 import { importAnyDocument } from '../../services/documentImporter';
 import {
   X,
-  Search,
-  FileText,
-  FileCode,
-  FileImage,
+  HardDrive,
+  Key,
   LogOut,
-  CheckCircle2,
+  FolderOpen,
   Loader2,
-  Sparkles,
-  Download,
-  Folder,
-  Settings,
+  CheckCircle2,
+  AlertTriangle,
   ExternalLink,
+  ShieldCheck,
+  ChevronDown,
+  ChevronUp,
+  FileCheck,
 } from 'lucide-react';
 
 interface GoogleDriveModalProps {
@@ -41,233 +43,228 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
   onClose,
   onImportComplete,
 }) => {
-  const [user, setUser] = useState<GoogleUser | null>(null);
-  const [files, setFiles] = useState<GoogleDriveFile[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [importingFileId, setImportingFileId] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<GoogleUser | null>(() => getGoogleUser());
+  const [credStatus, setCredStatus] = useState(() => getCredentialStatus());
+  const [showConfigSettings, setShowConfigSettings] = useState(false);
 
-  // Email input for user's personal Google ID
-  const [emailInput, setEmailInput] = useState('');
+  // Form states for manual credentials entry
+  const [inputClientId, setInputClientId] = useState(credStatus.clientId);
+  const [inputApiKey, setInputApiKey] = useState(credStatus.apiKey);
+  const [inputAppId, setInputAppId] = useState(credStatus.appId);
 
-  // Advanced Developer Settings (Hidden by default)
-  const [showDevSettings, setShowDevSettings] = useState(false);
-  const [clientIdInput, setClientIdInput] = useState('');
-  const [customTokenInput, setCustomTokenInput] = useState('');
+  // Operation states
+  const [isOpeningPicker, setIsOpeningPicker] = useState(false);
+  const [importingFileName, setImportingFileName] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [recentImports, setRecentImports] = useState<Array<{ name: string; size?: number; importedAt: string }>>([]);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const googleBtnContainerRef = useRef<HTMLDivElement>(null);
 
+  // Refresh credentials status & initialize GIS when opened
   useEffect(() => {
-    if (isOpen) {
-      const u = getGoogleUser();
-      setUser(u);
-      setClientIdInput(getSavedGoogleClientId());
-      if (u) {
-        loadFiles();
-      }
+    if (!isOpen) return;
+
+    const status = getCredentialStatus();
+    setCredStatus(status);
+    setInputClientId(status.clientId);
+    setInputApiKey(status.apiKey);
+    setInputAppId(status.appId);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    const activeUser = getGoogleUser();
+    setCurrentUser(activeUser);
+
+    // If client ID is present, initialize GIS
+    if (status.clientId) {
+      initializeGoogleIdentity(
+        (user) => {
+          setCurrentUser(user);
+          setSuccessMessage(`Signed in as ${user.name} (${user.email})`);
+          setErrorMessage(null);
+        },
+        (error) => {
+          console.warn('GIS info/error:', error);
+          if (!activeUser) {
+            setErrorMessage(error);
+          }
+        }
+      );
     }
   }, [isOpen]);
 
-  const loadFiles = async () => {
-    setIsLoading(true);
-    try {
-      const driveFiles = await listGoogleDriveFiles();
-      setFiles(driveFiles);
-    } catch (err: any) {
-      console.error('Failed to list Google Drive files:', err);
-      setStatusMessage(`Drive error: ${err.message || 'Failed to list files'}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // Render official Google button when needed
+  useEffect(() => {
+    if (!isOpen || currentUser) return;
 
-  // PRIMARY ACTION: Continue with Google (Just like YouTube, Notion, Canva)
-  const handleContinueWithGoogle = async () => {
-    setIsLoading(true);
-    setStatusMessage('Connecting with Google...');
-
-    try {
-      // 1. If Google Cloud Client ID is configured, try opening real Google OAuth popup
-      const savedClientId = clientIdInput.trim() || getSavedGoogleClientId();
-      if (savedClientId) {
-        try {
-          const token = await requestGoogleOAuthToken(savedClientId);
-          const u = await fetchGoogleProfileFromApi(token);
-          setUser(u);
-          setStatusMessage(`✓ Signed in with Google as ${u.name}!`);
-          setTimeout(() => setStatusMessage(null), 3000);
-          await loadFiles();
-          return;
-        } catch (oauthErr: any) {
-          console.warn('OAuth popup closed or failed, falling back to Google account profile:', oauthErr);
-        }
+    const timer = setTimeout(() => {
+      if (googleBtnContainerRef.current && credStatus.clientId) {
+        renderGoogleSignInButton(googleBtnContainerRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'pill',
+          width: 280,
+        });
       }
+    }, 150);
 
-      // 2. Connect directly with user's Google email (or default Google user)
-      const targetEmail = emailInput.trim() || 'user.google@gmail.com';
-      const displayName = targetEmail.split('@')[0].replace(/[._]/g, ' ');
-      const formattedName = displayName.charAt(0).toUpperCase() + displayName.slice(1);
+    return () => clearTimeout(timer);
+  }, [isOpen, currentUser, credStatus.clientId]);
 
-      const u = await signInWithCustomGoogleAccount(targetEmail, formattedName);
-      setUser(u);
-      setStatusMessage(`✓ Signed in as ${u.email}`);
-      setTimeout(() => setStatusMessage(null), 3000);
-      await loadFiles();
-    } catch (err: any) {
-      console.error('Sign in error:', err);
-      setStatusMessage(`Sign-in error: ${err.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  if (!isOpen) return null;
 
-  // Connect via Custom Google Token
-  const handleConnectToken = async (e: React.FormEvent) => {
+  // Handle saving credentials entered in the UI
+  const handleSaveCredentials = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customTokenInput.trim()) return;
+    setErrorMessage(null);
 
-    setIsLoading(true);
-    try {
-      const u = await signInWithGoogleAccessToken(customTokenInput.trim());
-      setUser(u);
-      setStatusMessage(`✓ Connected to live Google Drive as ${u.name}!`);
-      setTimeout(() => setStatusMessage(null), 3000);
-      await loadFiles();
-    } catch (err: any) {
-      setStatusMessage(`Token Error: ${err.message}`);
-    } finally {
-      setIsLoading(false);
+    if (!inputClientId.trim()) {
+      setErrorMessage('Please provide an OAuth 2.0 Client ID.');
+      return;
     }
+    if (!inputApiKey.trim()) {
+      setErrorMessage('Please provide a Google API Key.');
+      return;
+    }
+
+    saveUserGoogleCredentials(inputClientId, inputApiKey, inputAppId);
+    const updated = getCredentialStatus();
+    setCredStatus(updated);
+    setSuccessMessage('Google Cloud credentials updated successfully!');
+    setShowConfigSettings(false);
+
+    // Re-initialize GIS
+    initializeGoogleIdentity(
+      (user) => {
+        setCurrentUser(user);
+        setSuccessMessage(`Signed in as ${user.name}`);
+      },
+      (error) => setErrorMessage(error)
+    );
+
+    // Re-render button
+    setTimeout(() => {
+      if (googleBtnContainerRef.current) {
+        renderGoogleSignInButton(googleBtnContainerRef.current);
+      }
+    }, 100);
   };
 
-  // Save Client ID
-  const handleSaveClientId = () => {
-    saveGoogleClientId(clientIdInput.trim());
-    setStatusMessage('Google Client ID saved.');
-    setTimeout(() => setStatusMessage(null), 2500);
+  const handleClearCredentials = () => {
+    clearUserGoogleCredentials();
+    const updated = getCredentialStatus();
+    setCredStatus(updated);
+    setInputClientId('');
+    setInputApiKey('');
+    setInputAppId('');
+    setSuccessMessage('Saved credentials cleared.');
   };
 
   const handleSignOut = async () => {
-    await signOutFromGoogle();
-    setUser(null);
-    setFiles([]);
-    setEmailInput('');
-    setStatusMessage('Signed out of Google.');
-    setTimeout(() => setStatusMessage(null), 2500);
-  };
-
-  // Import file from Google Drive into NoteIn Studio
-  const handleImportFile = async (file: GoogleDriveFile) => {
-    setImportingFileId(file.id);
-    setStatusMessage(`Importing ${file.name} from Google Drive...`);
-
     try {
-      const { data, filename, mimeType } = await fetchGoogleDriveFile(file.id);
-      const res = await importAnyDocument({ data, filename, mimeType });
-
-      setStatusMessage(`✓ ${file.name} imported to NoteIn Studio!`);
-      setTimeout(() => {
-        onImportComplete(res.notebook);
-        onClose();
-      }, 700);
+      await signOutFromGoogle();
+      setCurrentUser(null);
+      setSuccessMessage('Signed out of Google account.');
+      setErrorMessage(null);
     } catch (err: any) {
-      console.error('Failed to import file from Google Drive:', err);
-      setStatusMessage(`Failed to import: ${err.message || 'Unknown error'}`);
-    } finally {
-      setImportingFileId(null);
+      setErrorMessage(`Failed to sign out: ${err?.message || err}`);
     }
   };
 
-  // Direct file upload from local device / drive folder
-  const handleDirectUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Launch the official Google Drive Picker
+  const handleOpenGooglePicker = async () => {
+    setErrorMessage(null);
+    setSuccessMessage(null);
 
-    setStatusMessage(`Importing local file: ${file.name}...`);
-    setIsLoading(true);
+    if (!credStatus.isFullyConfigured) {
+      setShowConfigSettings(true);
+      setErrorMessage('Google Client ID and API Key must be configured to open Google Picker.');
+      return;
+    }
+
+    setIsOpeningPicker(true);
 
     try {
-      let data: string | ArrayBuffer;
-      if (file.name.endsWith('.pdf') || file.type.startsWith('image/')) {
-        data = await file.arrayBuffer();
-      } else {
-        data = await file.text();
-      }
+      await openGoogleDrivePicker({
+        onPicked: async (pickedFiles: GooglePickedFile[]) => {
+          setIsOpeningPicker(false);
+          if (!pickedFiles || pickedFiles.length === 0) return;
 
-      const res = await importAnyDocument({
-        data,
-        filename: file.name,
-        mimeType: file.type || 'application/octet-stream',
+          for (const picked of pickedFiles) {
+            await handleImportPickedFile(picked);
+          }
+        },
+        onCancel: () => {
+          setIsOpeningPicker(false);
+        },
+        onError: (err: Error) => {
+          setIsOpeningPicker(false);
+          setErrorMessage(err.message || 'Google Drive Picker error occurred.');
+        },
       });
-
-      setStatusMessage(`✓ ${file.name} successfully imported!`);
-      setTimeout(() => {
-        onImportComplete(res.notebook);
-        onClose();
-      }, 700);
     } catch (err: any) {
-      console.error('Direct upload error:', err);
-      setStatusMessage(`Upload failed: ${err.message}`);
+      setIsOpeningPicker(false);
+      setErrorMessage(err.message || 'Failed to initialize Google Drive Picker.');
+    }
+  };
+
+  // Download real file from Drive API v3 and import into NoteIn Web
+  const handleImportPickedFile = async (file: GooglePickedFile) => {
+    setImportingFileName(file.name);
+    setErrorMessage(null);
+    setImportProgress(null);
+
+    try {
+      // 1. Download real file contents via Google Drive API v3
+      const downloaded = await downloadDriveFile(file);
+
+      // 2. Import into NoteIn Web
+      const result = await importAnyDocument(
+        {
+          data: downloaded.data,
+          filename: downloaded.filename,
+          mimeType: downloaded.mimeType,
+        },
+        (current, total) => {
+          setImportProgress({ current, total });
+        }
+      );
+
+      setRecentImports((prev) => [
+        { name: downloaded.filename, size: file.sizeBytes, importedAt: new Date().toLocaleTimeString() },
+        ...prev.slice(0, 4),
+      ]);
+
+      setSuccessMessage(
+        `Successfully imported "${result.notebook.title}" (${result.pages.length} ${
+          result.pages.length === 1 ? 'page' : 'pages'
+        }) into NoteIn!`
+      );
+
+      // Notify parent to open or refresh
+      onImportComplete(result.notebook);
+    } catch (err: any) {
+      console.error('Import failed:', err);
+      setErrorMessage(`Could not import "${file.name}": ${err?.message || err}`);
     } finally {
-      setIsLoading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      setImportingFileName(null);
+      setImportProgress(null);
     }
   };
 
-  const filteredFiles = files.filter((f) =>
-    f.name.toLowerCase().includes(searchQuery.toLowerCase().trim())
-  );
-
-  const isLive = isLiveGoogleDriveActive();
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1048576).toFixed(1)} MB`;
-  };
-
-  const getFileIcon = (filename: string) => {
-    if (filename.endsWith('.notein') || filename.endsWith('.in')) {
-      return (
-        <div style={{ width: '32px', height: '32px', borderRadius: '6px', backgroundColor: 'var(--accent-light)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Sparkles size={16} />
-        </div>
-      );
-    }
-    if (filename.endsWith('.pdf')) {
-      return (
-        <div style={{ width: '32px', height: '32px', borderRadius: '6px', backgroundColor: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <FileText size={16} />
-        </div>
-      );
-    }
-    if (filename.endsWith('.md') || filename.endsWith('.txt')) {
-      return (
-        <div style={{ width: '32px', height: '32px', borderRadius: '6px', backgroundColor: '#fef3c7', color: '#d97706', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <FileCode size={16} />
-        </div>
-      );
-    }
-    return (
-      <div style={{ width: '32px', height: '32px', borderRadius: '6px', backgroundColor: '#e0f2fe', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <FileImage size={16} />
-      </div>
-    );
-  };
-
-  if (!isOpen) return null;
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5174';
 
   return (
     <div
       style={{
         position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.55)',
-        backdropFilter: 'blur(4px)',
+        inset: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.65)',
+        backdropFilter: 'blur(5px)',
         zIndex: 1000,
         display: 'flex',
         alignItems: 'center',
@@ -275,38 +272,69 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
         padding: '16px',
       }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !importingFileName && !isOpeningPicker) {
+          onClose();
+        }
       }}
     >
-      {/* =========================================================================
-          VIEW 1: CLEAN "CONTINUE WITH GOOGLE" CARD (When user is NOT signed in)
-         ========================================================================= */}
-      {!user ? (
+      <div
+        className="animate-scale-up"
+        style={{
+          backgroundColor: 'var(--bg-primary)',
+          borderRadius: 'var(--radius-lg)',
+          width: '100%',
+          maxWidth: '620px',
+          maxHeight: '90vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 24px 48px rgba(0, 0, 0, 0.25)',
+          border: '1px solid var(--border-subtle)',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Header */}
         <div
           style={{
-            position: 'relative',
-            width: '100%',
-            maxWidth: '440px',
-            backgroundColor: 'var(--bg-primary)',
-            borderRadius: '24px',
-            padding: '36px 32px 28px 32px',
-            boxShadow: '0 12px 40px rgba(0, 0, 0, 0.2)',
-            border: '1px solid var(--border-subtle)',
-            fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
-            color: 'var(--text-primary)',
-            textAlign: 'center',
+            padding: '18px 24px',
+            borderBottom: '1px solid var(--border-subtle)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: 'var(--bg-secondary)',
           }}
         >
-          {/* Close Button */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div
+              style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--accent-primary)',
+              }}
+            >
+              <HardDrive size={20} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                Google Drive & Identity Integration
+              </h2>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 0 0' }}>
+                Official Google Identity Services &amp; Google Picker API
+              </p>
+            </div>
+          </div>
           <button
+            id="close-google-drive-modal-btn"
             onClick={onClose}
+            disabled={!!importingFileName || isOpeningPicker}
             style={{
-              position: 'absolute',
-              top: '18px',
-              right: '18px',
+              background: 'none',
               border: 'none',
-              background: 'transparent',
-              color: 'var(--text-secondary)',
+              color: 'var(--text-muted)',
               cursor: 'pointer',
               padding: '6px',
               borderRadius: '50%',
@@ -314,583 +342,601 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
               alignItems: 'center',
               justifyContent: 'center',
             }}
-            title="Close"
           >
             <X size={18} />
           </button>
+        </div>
 
-          {/* Google "G" Icon Header */}
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-            <div
-              style={{
-                width: '56px',
-                height: '56px',
-                borderRadius: '50%',
-                backgroundColor: 'var(--bg-secondary)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-              }}
-            >
-              <svg width="32" height="32" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-              </svg>
-            </div>
-          </div>
-
-          <h2 style={{ fontSize: '22px', fontWeight: 600, margin: '0 0 6px 0', color: 'var(--text-primary)' }}>
-            Sign in to NoteIn
-          </h2>
-          <p style={{ fontSize: '14px', color: 'var(--text-secondary)', margin: '0 0 24px 0', lineHeight: 1.4 }}>
-            Sync your notes, vector sketches, and Google Drive files
-          </p>
-
-          {/* PRIMARY BUTTON: Continue with Google */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <button
-              type="button"
-              onClick={handleContinueWithGoogle}
-              disabled={isLoading}
-              style={{
-                width: '100%',
-                padding: '13px 20px',
-                borderRadius: 'var(--radius-full)',
-                backgroundColor: '#ffffff',
-                color: '#3c4043',
-                border: '1px solid #dadce0',
-                fontSize: '15px',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '12px',
-                boxShadow: '0 2px 4px rgba(60,64,67,0.12)',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ffffff')}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-              </svg>
-              {isLoading ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  <span>Signing in...</span>
-                </>
-              ) : (
-                <span>Continue with Google</span>
-              )}
-            </button>
-
-            {/* Optional Personal Google ID input */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '4px 0' }}>
-              <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--border-subtle)' }} />
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>or sign in with email</span>
-              <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--border-subtle)' }} />
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input
-                type="email"
-                placeholder="your.email@gmail.com"
-                value={emailInput}
-                onChange={(e) => setEmailInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleContinueWithGoogle();
-                }}
-                style={{
-                  flex: 1,
-                  padding: '10px 14px',
-                  borderRadius: 'var(--radius-full)',
-                  border: '1px solid var(--border-subtle)',
-                  backgroundColor: 'var(--bg-secondary)',
-                  color: 'var(--text-primary)',
-                  fontSize: '13px',
-                  outline: 'none',
-                }}
-              />
-              <button
-                type="button"
-                onClick={handleContinueWithGoogle}
-                disabled={isLoading}
-                style={{
-                  padding: '10px 18px',
-                  borderRadius: 'var(--radius-full)',
-                  backgroundColor: 'var(--accent-primary)',
-                  color: '#ffffff',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  border: 'none',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                Sign In
-              </button>
-            </div>
-          </div>
-
-          {/* Status Message */}
-          {statusMessage && (
-            <div
-              style={{
-                marginTop: '16px',
-                padding: '8px 12px',
-                borderRadius: '8px',
-                backgroundColor: statusMessage.includes('Error') || statusMessage.includes('failed') ? 'rgba(239, 68, 68, 0.12)' : 'rgba(22, 163, 74, 0.12)',
-                color: statusMessage.includes('Error') || statusMessage.includes('failed') ? '#dc2626' : '#16a34a',
-                fontSize: '12px',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-              }}
-            >
-              <CheckCircle2 size={13} />
-              {statusMessage}
-            </div>
-          )}
-
-          {/* Discrete Developer Settings Toggle (Cleanly tucked away at bottom) */}
-          <div style={{ marginTop: '24px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'center' }}>
-            <button
-              type="button"
-              onClick={() => setShowDevSettings(!showDevSettings)}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text-muted)',
-                fontSize: '11px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-              }}
-            >
-              <Settings size={11} />
-              {showDevSettings ? 'Hide Google Cloud Settings' : 'Custom Google Cloud Settings'}
-            </button>
-          </div>
-
-          {/* Collapsible Advanced Settings (for production Google Cloud Client IDs) */}
-          {showDevSettings && (
+        {/* Modal Body */}
+        <div style={{ padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {/* Notifications / Alerts */}
+          {errorMessage && (
             <div
               className="animate-fade-in"
               style={{
-                marginTop: '12px',
-                padding: '12px',
-                borderRadius: '12px',
-                backgroundColor: 'var(--bg-secondary)',
-                border: '1px solid var(--border-subtle)',
-                textAlign: 'left',
+                padding: '12px 16px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                color: '#dc2626',
+                fontSize: '13px',
                 display: 'flex',
-                flexDirection: 'column',
+                alignItems: 'flex-start',
                 gap: '10px',
+                lineHeight: 1.45,
               }}
             >
+              <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: '1px' }} />
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 600 }}>Google Cloud OAuth Client ID:</span>
-                  <a
-                    href="https://console.cloud.google.com/apis/credentials"
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ fontSize: '10px', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '2px' }}
-                  >
-                    Google Cloud Console <ExternalLink size={9} />
-                  </a>
-                </div>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <input
-                    type="text"
-                    placeholder="xxxx.apps.googleusercontent.com"
-                    value={clientIdInput}
-                    onChange={(e) => setClientIdInput(e.target.value)}
-                    style={{
-                      flex: 1,
-                      padding: '6px 8px',
-                      borderRadius: '4px',
-                      border: '1px solid var(--border-subtle)',
-                      fontSize: '11px',
-                      backgroundColor: 'var(--bg-primary)',
-                      color: 'var(--text-primary)',
-                      outline: 'none',
-                    }}
-                  />
-                  <button
-                    onClick={handleSaveClientId}
-                    style={{
-                      padding: '6px 10px',
-                      borderRadius: '4px',
-                      backgroundColor: 'var(--accent-primary)',
-                      color: '#fff',
-                      fontSize: '11px',
-                      border: 'none',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <span style={{ fontSize: '11px', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                  Or Direct Google Token (Google OAuth Playground):
-                </span>
-                <form onSubmit={handleConnectToken} style={{ display: 'flex', gap: '6px' }}>
-                  <input
-                    type="password"
-                    placeholder="ya29..."
-                    value={customTokenInput}
-                    onChange={(e) => setCustomTokenInput(e.target.value)}
-                    style={{
-                      flex: 1,
-                      padding: '6px 8px',
-                      borderRadius: '4px',
-                      border: '1px solid var(--border-subtle)',
-                      fontSize: '11px',
-                      backgroundColor: 'var(--bg-primary)',
-                      color: 'var(--text-primary)',
-                      outline: 'none',
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    style={{
-                      padding: '6px 10px',
-                      borderRadius: '4px',
-                      backgroundColor: 'var(--bg-tertiary)',
-                      color: 'var(--text-primary)',
-                      fontSize: '11px',
-                      border: '1px solid var(--border-subtle)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Connect
-                  </button>
-                </form>
+                <strong>Error:</strong> {errorMessage}
               </div>
             </div>
           )}
-        </div>
-      ) : (
-        /* =========================================================================
-            VIEW 2: GOOGLE DRIVE FILE BROWSER (When user IS signed in)
-           ========================================================================= */
-        <div
-          style={{
-            position: 'relative',
-            width: '100%',
-            maxWidth: '740px',
-            backgroundColor: 'var(--bg-primary)',
-            borderRadius: 'var(--radius-lg)',
-            boxShadow: 'var(--shadow-xl)',
-            border: '1px solid var(--border-subtle)',
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          {/* Drive Header Bar */}
+
+          {successMessage && (
+            <div
+              className="animate-fade-in"
+              style={{
+                padding: '12px 16px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(22, 163, 74, 0.1)',
+                border: '1px solid rgba(22, 163, 74, 0.25)',
+                color: '#16a34a',
+                fontSize: '13px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+              }}
+            >
+              <CheckCircle2 size={18} style={{ flexShrink: 0 }} />
+              <div>{successMessage}</div>
+            </div>
+          )}
+
+          {/* SECTION 1: AUTHENTICATED USER OR SIGN-IN */}
           <div
             style={{
-              padding: '16px 20px',
-              borderBottom: '1px solid var(--border-subtle)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
+              padding: '18px',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-subtle)',
               backgroundColor: 'var(--bg-secondary)',
             }}
           >
-            {/* Google Drive Logo & Title */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <svg width="24" height="24" viewBox="0 0 87.3 78">
-                <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
-                <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
-                <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
-                <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
-                <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h55.5c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
-                <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
-              </svg>
-              <div>
-                <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
-                  Google Drive
-                </h2>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  My Drive
-                </span>
-              </div>
-            </div>
+            {currentUser ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
+                  {currentUser.picture ? (
+                    <img
+                      src={currentUser.picture}
+                      alt={currentUser.name}
+                      style={{
+                        width: '46px',
+                        height: '46px',
+                        borderRadius: '50%',
+                        border: '2px solid var(--accent-primary)',
+                        objectFit: 'cover',
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: '46px',
+                        height: '46px',
+                        borderRadius: '50%',
+                        backgroundColor: 'var(--accent-primary)',
+                        color: '#fff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 700,
+                        fontSize: '18px',
+                      }}
+                    >
+                      {currentUser.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
 
-            {/* Signed-in Account Pill with Sign Out */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '4px 10px',
-                  borderRadius: 'var(--radius-full)',
-                  backgroundColor: 'var(--bg-tertiary)',
-                  border: '1px solid var(--border-subtle)',
-                }}
-              >
-                <img
-                  src={user.picture}
-                  alt={user.name}
-                  style={{ width: '24px', height: '24px', borderRadius: '50%', objectFit: 'cover' }}
-                />
-                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  {user.email}
-                </span>
-              </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span
+                        style={{
+                          fontSize: '15px',
+                          fontWeight: 700,
+                          color: 'var(--text-primary)',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {currentUser.name}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          padding: '2px 8px',
+                          borderRadius: 'var(--radius-full)',
+                          backgroundColor: 'rgba(22, 163, 74, 0.15)',
+                          color: '#16a34a',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <ShieldCheck size={12} />
+                        Verified
+                      </span>
+                    </div>
+                    <span
+                      style={{
+                        fontSize: '13px',
+                        color: 'var(--text-secondary)',
+                        display: 'block',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {currentUser.email}
+                    </span>
+                  </div>
+                </div>
 
-              <button
-                onClick={handleSignOut}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border-subtle)',
-                  backgroundColor: 'transparent',
-                  color: 'var(--text-secondary)',
-                  fontSize: '12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  cursor: 'pointer',
-                }}
-                title="Switch Account / Sign Out"
-              >
-                <LogOut size={13} />
-                Sign Out
-              </button>
-
-              <button
-                onClick={onClose}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  padding: '4px',
-                }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-          </div>
-
-          {/* Drive Body */}
-          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {/* Search and Action Bar */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-              <div style={{ position: 'relative', flex: 1 }}>
-                <Search size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                <input
-                  type="text"
-                  placeholder="Search in Drive..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                <button
+                  type="button"
+                  onClick={handleSignOut}
                   style={{
-                    width: '100%',
-                    padding: '8px 12px 8px 34px',
+                    padding: '8px 14px',
                     borderRadius: 'var(--radius-full)',
                     border: '1px solid var(--border-subtle)',
-                    backgroundColor: 'var(--bg-secondary)',
-                    color: 'var(--text-primary)',
-                    fontSize: '13px',
-                    outline: 'none',
+                    backgroundColor: 'var(--bg-primary)',
+                    color: 'var(--text-secondary)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
                   }}
-                />
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = '#dc2626';
+                    e.currentTarget.style.borderColor = '#dc2626';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--text-secondary)';
+                    e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                  }}
+                >
+                  <LogOut size={14} />
+                  Sign Out
+                </button>
               </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px', textAlign: 'center', padding: '10px 0' }}>
+                <div>
+                  <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px 0' }}>
+                    Sign in with Google
+                  </h3>
+                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, maxWidth: '420px' }}>
+                    Connect your real Google account using Google Identity Services to access Drive files.
+                  </p>
+                </div>
 
-              {/* Direct Local Upload */}
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept=".notein,.in,.pdf,.docx,.txt,.md,image/*"
-                onChange={handleDirectUpload}
-                style={{ display: 'none' }}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                style={{
-                  padding: '8px 14px',
-                  borderRadius: 'var(--radius-full)',
-                  border: '1px solid var(--border-subtle)',
-                  backgroundColor: 'var(--bg-secondary)',
-                  color: 'var(--text-primary)',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <Folder size={14} />
-                Upload Local File
-              </button>
+                {/* Always Rendered Official Google Sign-In Button */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                  {credStatus.hasClientId ? (
+                    <div
+                      ref={googleBtnContainerRef}
+                      style={{ minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    />
+                  ) : (
+                    <button
+                      id="continue-with-google-btn"
+                      type="button"
+                      onClick={() => setShowConfigSettings(true)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '10px 24px',
+                        backgroundColor: '#ffffff',
+                        color: '#3c4043',
+                        border: '1px solid #dadce0',
+                        borderRadius: '24px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        boxShadow: '0 1px 3px rgba(60,64,67, 0.15)',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#f8fafd';
+                        e.currentTarget.style.boxShadow = '0 1px 4px rgba(60,64,67, 0.25)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = '#ffffff';
+                        e.currentTarget.style.boxShadow = '0 1px 3px rgba(60,64,67, 0.15)';
+                      }}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24">
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                      </svg>
+                      <span>Continue with Google</span>
+                    </button>
+                  )}
+                  {!credStatus.hasClientId && (
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Click to link your Google Client ID for this local dev app
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 2: OPEN FROM GOOGLE DRIVE (GOOGLE PICKER API) */}
+          <div
+            style={{
+              padding: '20px',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-subtle)',
+              backgroundColor: 'var(--bg-primary)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+              <div>
+                <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <FolderOpen size={18} color="var(--accent-primary)" />
+                  Open Files via Google Picker
+                </h3>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                  Browse your real Google Drive with Google's official File Picker dialog.
+                  Selecting a file grants per-file permission (<code style={{ fontSize: '11px', background: 'var(--bg-secondary)', padding: '2px 5px', borderRadius: '4px' }}>drive.file</code> scope).
+                </p>
+              </div>
             </div>
 
-            {/* Status Alert Banner */}
-            {statusMessage && (
+            {/* Launch Picker Action */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handleOpenGooglePicker}
+                disabled={isOpeningPicker || !!importingFileName || !credStatus.isFullyConfigured}
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 'var(--radius-full)',
+                  backgroundColor: !credStatus.isFullyConfigured ? 'var(--bg-tertiary)' : 'var(--accent-primary)',
+                  color: !credStatus.isFullyConfigured ? 'var(--text-muted)' : '#ffffff',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  cursor: !credStatus.isFullyConfigured ? 'not-allowed' : 'pointer',
+                  border: 'none',
+                  boxShadow: credStatus.isFullyConfigured ? '0 4px 12px rgba(37, 99, 235, 0.25)' : 'none',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {isOpeningPicker ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Launching Google Picker...
+                  </>
+                ) : (
+                  <>
+                    <FolderOpen size={16} />
+                    Open from Google Drive
+                  </>
+                )}
+              </button>
+
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                Supports NoteIn packages (.notein, .in), PDF, Google Docs, Images, Markdown, and Text.
+              </span>
+            </div>
+
+            {/* Active Import Progress */}
+            {importingFileName && (
               <div
                 className="animate-fade-in"
                 style={{
-                  padding: '8px 14px',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: statusMessage.includes('Failed') || statusMessage.includes('Error') ? 'rgba(239, 68, 68, 0.12)' : 'rgba(22, 163, 74, 0.12)',
-                  color: statusMessage.includes('Failed') || statusMessage.includes('Error') ? '#dc2626' : '#16a34a',
-                  fontSize: '12px',
-                  fontWeight: 600,
+                  padding: '14px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'rgba(37, 99, 235, 0.08)',
+                  border: '1px solid rgba(37, 99, 235, 0.2)',
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
+                  flexDirection: 'column',
+                  gap: '8px',
                 }}
               >
-                <CheckCircle2 size={13} />
-                {statusMessage}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Loader2 size={16} className="animate-spin" color="var(--accent-primary)" />
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Downloading &amp; Parsing "{importingFileName}"...
+                    </span>
+                  </div>
+                  {importProgress && (
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      Page {importProgress.current} / {importProgress.total}
+                    </span>
+                  )}
+                </div>
+                <div
+                  style={{
+                    width: '100%',
+                    height: '6px',
+                    borderRadius: '3px',
+                    backgroundColor: 'var(--bg-tertiary)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      height: '100%',
+                      backgroundColor: 'var(--accent-primary)',
+                      width: importProgress ? `${(importProgress.current / importProgress.total) * 100}%` : '50%',
+                      transition: 'width 0.2s ease',
+                    }}
+                  />
+                </div>
               </div>
             )}
 
-            {/* Files List Header */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  Files ({filteredFiles.length})
+            {/* Recent Imports in Current Session */}
+            {recentImports.length > 0 && (
+              <div style={{ marginTop: '6px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                  Recently Opened from Drive
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                  {recentImports.map((item, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: '8px 12px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'var(--bg-secondary)',
+                        fontSize: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <FileCheck size={14} color="#16a34a" />
+                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{item.name}</span>
+                      </div>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{item.importedAt}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 3: CREDENTIALS & GOOGLE CLOUD CONFIGURATION */}
+          <div
+            style={{
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-subtle)',
+              backgroundColor: 'var(--bg-secondary)',
+              overflow: 'hidden',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setShowConfigSettings(!showConfigSettings)}
+              style={{
+                width: '100%',
+                padding: '14px 18px',
+                background: 'none',
+                border: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+                color: 'var(--text-primary)',
+                textAlign: 'left',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Key size={16} color="var(--accent-primary)" />
+                <span style={{ fontSize: '13px', fontWeight: 600 }}>
+                  Google Cloud Credentials &amp; API Setup
                 </span>
                 <span
                   style={{
-                    fontSize: '10px',
+                    fontSize: '11px',
                     fontWeight: 600,
                     padding: '2px 8px',
                     borderRadius: 'var(--radius-full)',
-                    backgroundColor: isLive ? 'rgba(22, 163, 74, 0.12)' : 'rgba(37, 99, 235, 0.12)',
-                    color: isLive ? '#16a34a' : 'var(--accent-primary)',
+                    backgroundColor: credStatus.isFullyConfigured ? 'rgba(22, 163, 74, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                    color: credStatus.isFullyConfigured ? '#16a34a' : '#dc2626',
                   }}
                 >
-                  {isLive ? 'Live Drive' : 'Connected'}
+                  {credStatus.isFullyConfigured ? 'Configured' : 'Setup Required'}
                 </span>
               </div>
-            </div>
+              {showConfigSettings ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
 
-            {/* Drive Files Scrollable List */}
-            <div
-              style={{
-                maxHeight: '320px',
-                overflowY: 'auto',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border-subtle)',
-                backgroundColor: 'var(--bg-secondary)',
-              }}
-            >
-              {filteredFiles.length > 0 ? (
-                filteredFiles.map((f) => (
-                  <div
-                    key={f.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '10px 14px',
-                      borderBottom: '1px solid var(--border-subtle)',
-                      transition: 'background-color 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-primary)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
-                      {getFileIcon(f.name)}
-                      <div style={{ minWidth: 0 }}>
-                        <span
-                          style={{
-                            fontSize: '13px',
-                            fontWeight: 600,
-                            color: 'var(--text-primary)',
-                            display: 'block',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                        >
-                          {f.name}
-                        </span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                            {formatFileSize(f.size)}
-                          </span>
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>•</span>
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                            {new Date(f.modifiedTime).toLocaleDateString()}
-                          </span>
-                          {f.description && (
-                            <>
-                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>•</span>
-                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '220px' }}>
-                                {f.description}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
+            {showConfigSettings && (
+              <div style={{ padding: '0 18px 18px 18px', borderTop: '1px solid var(--border-subtle)' }}>
+                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '14px 0 12px 0', lineHeight: 1.5 }}>
+                  Google Identity Services and Google Picker API require a valid OAuth 2.0 Client ID and API Key from your Google Cloud Console.
+                  Credentials can be supplied via environment variables in <code style={{ background: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '4px' }}>.env.local</code> or entered directly below for local testing.
+                </p>
 
-                    {/* Bring to NoteIn CTA Button */}
-                    <button
-                      onClick={() => handleImportFile(f)}
-                      disabled={importingFileId !== null}
+                <form onSubmit={handleSaveCredentials} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                      OAuth 2.0 Web Client ID (VITE_GOOGLE_CLIENT_ID)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="1234567890-abcdef.apps.googleusercontent.com"
+                      value={inputClientId}
+                      onChange={(e) => setInputClientId(e.target.value)}
                       style={{
-                        padding: '6px 14px',
-                        borderRadius: 'var(--radius-full)',
-                        backgroundColor: importingFileId === f.id ? 'var(--bg-tertiary)' : 'var(--accent-primary)',
-                        color: importingFileId === f.id ? 'var(--text-muted)' : '#ffffff',
+                        width: '100%',
+                        padding: '8px 12px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-subtle)',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        fontSize: '12px',
+                        outline: 'none',
+                        fontFamily: 'monospace',
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                      Google API Key for Picker (VITE_GOOGLE_API_KEY)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="AIzaSy..."
+                      value={inputApiKey}
+                      onChange={(e) => setInputApiKey(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-subtle)',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        fontSize: '12px',
+                        outline: 'none',
+                        fontFamily: 'monospace',
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                      Google Cloud Project Number / App ID (VITE_GOOGLE_APP_ID, optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="1234567890 (derived automatically if left blank)"
+                      value={inputAppId}
+                      onChange={(e) => setInputAppId(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-subtle)',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        fontSize: '12px',
+                        outline: 'none',
+                        fontFamily: 'monospace',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={handleClearCredentials}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-subtle)',
+                        backgroundColor: 'transparent',
+                        color: 'var(--text-muted)',
                         fontSize: '12px',
                         fontWeight: 600,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        flexShrink: 0,
                         cursor: 'pointer',
-                        border: 'none',
                       }}
                     >
-                      {importingFileId === f.id ? (
-                        <>
-                          <Loader2 size={12} className="animate-spin" />
-                          Bringing...
-                        </>
-                      ) : (
-                        <>
-                          <Download size={12} />
-                          Bring to NoteIn
-                        </>
-                      )}
+                      Clear Saved
+                    </button>
+
+                    <button
+                      type="submit"
+                      style={{
+                        padding: '8px 18px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'var(--accent-primary)',
+                        color: '#ffffff',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        border: 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Save &amp; Apply Credentials
                     </button>
                   </div>
-                ))
-              ) : (
-                <div style={{ padding: '36px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                  No files found matching "{searchQuery}"
+                </form>
+
+                {/* Helpful Checklist & Instructions */}
+                <div
+                  style={{
+                    marginTop: '16px',
+                    padding: '12px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--bg-primary)',
+                    border: '1px solid var(--border-subtle)',
+                    fontSize: '11px',
+                    color: 'var(--text-secondary)',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '6px' }}>
+                    Google Cloud Console Checklist:
+                  </strong>
+                  <ul style={{ margin: 0, paddingLeft: '16px' }}>
+                    <li>
+                      <strong>Enable APIs:</strong> Google Drive API &amp; Google Picker API
+                    </li>
+                    <li>
+                      <strong>Authorized JavaScript Origin:</strong>{' '}
+                      <code style={{ background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: '3px' }}>
+                        {currentOrigin}
+                      </code>
+                    </li>
+                    <li>
+                      <strong>OAuth Consent Screen:</strong> In testing mode, add your Google account to Test Users.
+                    </li>
+                    <li>
+                      <strong>Scope:</strong> <code style={{ background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: '3px' }}>https://www.googleapis.com/auth/drive.file</code>
+                    </li>
+                  </ul>
+                  <a
+                    href="https://console.cloud.google.com/apis/dashboard"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      color: 'var(--accent-primary)',
+                      marginTop: '8px',
+                      textDecoration: 'none',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Open Google Cloud Console <ExternalLink size={11} />
+                  </a>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 };

@@ -16,6 +16,7 @@ interface TextBoxItemProps {
   onCommitSize: (oldW: number, oldH: number, newW: number, newH: number) => void;
   onDelete: () => void;
   onDuplicate?: () => void;
+  onUpdateStyle?: (updates: Partial<TextBox>) => void;
   zoom: number;
 }
 
@@ -27,7 +28,7 @@ function isHtml(str: string): boolean {
 // Format raw text or HTML for viewing
 function formatContentForDisplay(raw: string): string {
   if (!raw) return '';
-  if (raw === 'Click to edit...' || raw === 'Click to edit') return '';
+  if (raw === 'Type notes here...' || raw === 'Click to edit') return '';
 
   // If contains HTML tags
   if (isHtml(raw)) {
@@ -159,9 +160,10 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
   onCommitSize,
   onDelete,
   onDuplicate,
+  onUpdateStyle,
   zoom,
 }) => {
-  const initialContent = textBox.content === 'Click to edit...' || textBox.content === 'Click to edit'
+  const initialContent = textBox.content === 'Type notes here...' || textBox.content === 'Click to edit'
     ? ''
     : textBox.content;
 
@@ -175,6 +177,8 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     clientY: number;
     origX: number;
     origY: number;
+    lastX: number;
+    lastY: number;
     hasMoved: boolean;
   } | null>(null);
 
@@ -183,31 +187,100 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     clientY: number;
     origW: number;
     origH: number;
+    lastW: number;
+    lastH: number;
   } | null>(null);
 
-  // Sync content when prop changes
+  // Size before current edit session to commit only on session end
+  const sizeBeforeEditRef = useRef<{ width: number; height: number }>({
+    width: textBox.width,
+    height: textBox.height,
+  });
+
   useEffect(() => {
-    const clean = textBox.content === 'Click to edit...' || textBox.content === 'Click to edit'
+    if (isEditing) {
+      sizeBeforeEditRef.current = { width: textBox.width, height: textBox.height };
+    }
+  }, [isEditing]);
+
+  // Sync content when prop changes (only when not actively editing)
+  useEffect(() => {
+    if (isEditing) return;
+    const clean = textBox.content === 'Type notes here...' || textBox.content === 'Click to edit'
       ? ''
       : textBox.content;
     setContent(clean);
-  }, [textBox.content]);
+  }, [textBox.content, isEditing]);
 
-  // Measure and auto-expand dimensions to fit rich content, code cards, and tables
+  // Measure and auto-fit dimensions snugly around the actual typed text
   const autoExpandDimensions = useCallback((el: HTMLElement) => {
-    // el.scrollWidth measures rendered width of long lines, tables, code cards
-    const measuredW = el.scrollWidth;
-    const neededWidth = Math.min(1200, Math.max(textBox.width, Math.ceil(measuredW + 40)));
+    const rawText = el.innerText || '';
+    const isBlank = !rawText.trim();
+    const hasCustomBg = textBox.backgroundColor && textBox.backgroundColor !== 'transparent';
 
-    // el.scrollHeight measures rendered height of all paragraphs, lists, and code blocks
-    const measuredH = el.scrollHeight;
-    const neededHeight = Math.max(textBox.height, Math.ceil(measuredH + 24));
+    let textW = 0;
+    let textH = 0;
 
-    if (neededWidth !== textBox.width || neededHeight !== textBox.height) {
-      onUpdateSize(neededWidth, neededHeight);
-      onCommitSize(textBox.width, textBox.height, neededWidth, neededHeight);
+    if (!isBlank) {
+      // Use an unconstrained measuring element to measure exact natural content width and height
+      // without being constrained by the container's current width!
+      // This ensures words never wrap prematurely on single lines and bounds hug the text tightly.
+      const measureEl = document.createElement('div');
+      measureEl.style.position = 'fixed';
+      measureEl.style.left = '-9999px';
+      measureEl.style.top = '-9999px';
+      measureEl.style.visibility = 'hidden';
+      measureEl.style.width = 'max-content';
+      measureEl.style.maxWidth = '640px';
+      measureEl.style.fontFamily = textBox.fontFamily;
+      measureEl.style.fontSize = `${textBox.fontSize}px`;
+      measureEl.style.fontWeight = textBox.bold ? 'bold' : 'normal';
+      measureEl.style.fontStyle = textBox.italic ? 'italic' : 'normal';
+      measureEl.style.lineHeight = '1.35';
+      measureEl.style.whiteSpace = 'pre-wrap';
+      measureEl.style.wordBreak = 'break-word';
+      measureEl.style.padding = '0';
+      measureEl.style.margin = '0';
+      measureEl.innerHTML = el.innerHTML;
+      document.body.appendChild(measureEl);
+      const rect = measureEl.getBoundingClientRect();
+      document.body.removeChild(measureEl);
+
+      textW = Math.ceil(rect.width);
+      textH = Math.ceil(rect.height);
     }
-  }, [textBox.width, textBox.height, onUpdateSize, onCommitSize]);
+
+    let neededWidth: number;
+    let neededHeight: number;
+
+    if (hasCustomBg) {
+      // Sticky Note cards have comfortable card min dimensions
+      neededWidth = Math.max(160, textW + 24);
+      neededHeight = Math.max(70, textH + 16);
+    } else {
+      // Plain text: fit tightly and snugly around the text only!
+      // Padding is 3px top/bottom and 6px left/right (total 6px H, 12px W)
+      neededWidth = isBlank ? 48 : Math.max(32, textW + 16);
+      neededHeight = isBlank ? 26 : Math.max(22, textH + 6);
+    }
+
+    if (Math.abs(neededWidth - textBox.width) > 2 || Math.abs(neededHeight - textBox.height) > 2) {
+      onUpdateSize(neededWidth, neededHeight);
+    }
+  }, [textBox.width, textBox.height, textBox.backgroundColor, textBox.fontFamily, textBox.fontSize, textBox.bold, textBox.italic, onUpdateSize]);
+
+  const contentRef = useRef(content);
+  contentRef.current = content;
+
+  // When isEditing turns off, ensure any pending HTML is committed
+  const isEditingRef = useRef(isEditing);
+  useEffect(() => {
+    if (isEditingRef.current && !isEditing) {
+      const finalHtml = editorRef.current ? editorRef.current.innerHTML : contentRef.current;
+      onEndEditing(finalHtml);
+    }
+    isEditingRef.current = isEditing;
+  }, [isEditing, onEndEditing]);
 
   // Focus contentEditable editor when entering edit mode
   useEffect(() => {
@@ -220,6 +293,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
         editorRef.current.innerHTML = displayHtml;
       }
       editorRef.current.focus();
+      autoExpandDimensions(editorRef.current);
 
       // Place cursor at the end of content
       try {
@@ -234,15 +308,17 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
   }, [isEditing]);
 
   const handleStartEdit = useCallback(() => {
-    if (content === 'Click to edit...' || content === 'Click to edit') {
+    if (content === 'Type notes here...' || content === 'Click to edit') {
       setContent('');
     }
     onSelect();
     onStartEditing();
   }, [content, onSelect, onStartEditing]);
 
+  const [isDragging, setIsDragging] = useState(false);
+
   // Drag on Card Body or Grip Handle
-  const handlePointerDown = (e: React.PointerEvent | React.MouseEvent) => {
+  const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.stopPropagation();
 
@@ -252,8 +328,11 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
       return;
     }
 
+    // Crucial: prevent browser native drag ghost and text selection
+    e.preventDefault();
+
     try {
-      if ('pointerId' in e) (e.currentTarget as any).setPointerCapture(e.pointerId);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } catch {}
 
     dragStartRef.current = {
@@ -261,50 +340,61 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
       clientY: e.clientY,
       origX: textBox.x,
       origY: textBox.y,
+      lastX: textBox.x,
+      lastY: textBox.y,
       hasMoved: false,
     };
   };
 
-  const handlePointerMove = (e: React.PointerEvent | React.MouseEvent) => {
+  const handlePointerMove = (e: React.PointerEvent) => {
     if (!dragStartRef.current) return;
     e.stopPropagation();
+    e.preventDefault();
 
     const dx = (e.clientX - dragStartRef.current.clientX) / zoom;
     const dy = (e.clientY - dragStartRef.current.clientY) / zoom;
 
     if (!dragStartRef.current.hasMoved && Math.hypot(dx, dy) > 3) {
       dragStartRef.current.hasMoved = true;
+      setIsDragging(true);
+      if (isEditing) {
+        const finalHtml = editorRef.current ? editorRef.current.innerHTML : content;
+        onEndEditing(finalHtml);
+      }
     }
 
     if (dragStartRef.current.hasMoved) {
       const newX = Math.round(dragStartRef.current.origX + dx);
       const newY = Math.round(dragStartRef.current.origY + dy);
+      dragStartRef.current.lastX = newX;
+      dragStartRef.current.lastY = newY;
       onUpdatePosition(newX, newY);
     }
   };
 
-  const handlePointerUp = (e: React.PointerEvent | React.MouseEvent) => {
+  const handlePointerUp = (e: React.PointerEvent) => {
     e.stopPropagation();
 
-    if ('pointerId' in e) {
-      try {
-        (e.currentTarget as any).releasePointerCapture(e.pointerId);
-      } catch {}
-    }
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+
+    setIsDragging(false);
 
     if (dragStartRef.current) {
-      const { origX, origY, hasMoved } = dragStartRef.current;
+      const { origX, origY, lastX, lastY, hasMoved } = dragStartRef.current;
       dragStartRef.current = null;
 
       if (hasMoved) {
-        if (textBox.x !== origX || textBox.y !== origY) {
-          onCommitPosition(origX, origY, textBox.x, textBox.y);
+        if (lastX !== origX || lastY !== origY) {
+          onCommitPosition(origX, origY, lastX, lastY);
         }
         return;
       }
     }
 
-    handleStartEdit();
+    // Single click: select the text box
+    onSelect();
   };
 
   // Handle Resize
@@ -319,6 +409,8 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
       clientY: e.clientY,
       origW: textBox.width,
       origH: textBox.height,
+      lastW: textBox.width,
+      lastH: textBox.height,
     };
   };
 
@@ -332,6 +424,8 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
     const newW = Math.max(80, Math.round(resizeStartRef.current.origW + dx));
     const newH = Math.max(30, Math.round(resizeStartRef.current.origH + dy));
 
+    resizeStartRef.current.lastW = newW;
+    resizeStartRef.current.lastH = newH;
     onUpdateSize(newW, newH);
   };
 
@@ -343,11 +437,11 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {}
 
-    const { origW, origH } = resizeStartRef.current;
+    const { origW, origH, lastW, lastH } = resizeStartRef.current;
     resizeStartRef.current = null;
 
-    if (textBox.width !== origW || textBox.height !== origH) {
-      onCommitSize(origW, origH, textBox.width, textBox.height);
+    if (lastW !== origW || lastH !== origH) {
+      onCommitSize(origW, origH, lastW, lastH);
     }
   };
 
@@ -365,6 +459,20 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
       return;
     }
     const finalHtml = editorRef.current ? editorRef.current.innerHTML : content;
+
+    // Commit expanded dimensions on editing session end
+    if (
+      textBox.width !== sizeBeforeEditRef.current.width ||
+      textBox.height !== sizeBeforeEditRef.current.height
+    ) {
+      onCommitSize(
+        sizeBeforeEditRef.current.width,
+        sizeBeforeEditRef.current.height,
+        textBox.width,
+        textBox.height
+      );
+    }
+
     onEndEditing(finalHtml);
   };
 
@@ -444,14 +552,20 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
   return (
     <div
       ref={containerRef}
+      draggable={false}
+      onDragStart={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
       onPointerDown={handlePointerDown}
-      onMouseDown={handlePointerDown}
       onPointerMove={handlePointerMove}
-      onMouseMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onMouseUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onClick={(e) => {
+        e.stopPropagation();
+        onSelect();
+      }}
+      onDoubleClick={(e) => {
         e.stopPropagation();
         handleStartEdit();
       }}
@@ -462,26 +576,26 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
         width: `${textBox.width}px`,
         minHeight: `${textBox.height}px`,
         boxSizing: 'border-box',
-        cursor: isEditing ? 'text' : isSelected ? 'move' : 'pointer',
+        cursor: isDragging ? 'grabbing' : isEditing ? 'text' : isSelected ? 'move' : 'pointer',
         userSelect: isEditing ? 'text' : 'none',
+        WebkitUserSelect: isEditing ? 'text' : 'none',
         border: isSelected
           ? '1.5px dashed var(--accent-primary)'
           : textBox.borderColor && textBox.borderColor !== 'transparent'
           ? `1.5px solid ${textBox.borderColor}`
           : '1.5px solid transparent',
         borderRadius: `${textBox.borderRadius || 6}px`,
-        padding: '6px 10px',
+        padding: hasCustomBg ? '8px 12px' : '3px 6px',
         backgroundColor: hasCustomBg ? bgColor : isSelected ? 'rgba(59, 130, 246, 0.04)' : 'transparent',
         boxShadow: hasCustomBg ? '0 4px 14px rgba(0, 0, 0, 0.08)' : 'none',
-        transition: 'border-color 0.15s ease',
+        transition: isDragging ? 'none' : 'border-color 0.15s ease',
       }}
     >
       {/* Floating Selection Action Bar (Move Grip, Edit, Duplicate, Delete) */}
       {isSelected && (
         <div
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
             top: '-28px',
@@ -494,19 +608,40 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             borderRadius: '4px',
             padding: '2px 6px',
             boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
-            cursor: 'grab',
             zIndex: 20,
+            userSelect: 'none',
           }}
         >
-          <GripHorizontal size={13} color="var(--text-muted)" />
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 500, userSelect: 'none' }}>
-            Move
-          </span>
+          {/* Dedicated Move Grip */}
+          <div
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              cursor: isDragging ? 'grabbing' : 'grab',
+              padding: '2px 4px',
+              borderRadius: '2px',
+              userSelect: 'none',
+            }}
+            title="Drag to Move"
+          >
+            <GripHorizontal size={13} color="var(--text-muted)" />
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 500, userSelect: 'none' }}>
+              Move
+            </span>
+          </div>
 
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
+              e.preventDefault();
               handleStartEdit();
             }}
             title="Edit Text"
@@ -516,6 +651,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
               color: 'var(--accent-primary)',
               fontSize: '11px',
               fontWeight: 600,
+              cursor: 'pointer',
             }}
           >
             <Edit3 size={12} />
@@ -524,8 +660,11 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
           {onDuplicate && (
             <button
               type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 onDuplicate();
               }}
               title="Duplicate Text Box"
@@ -533,6 +672,7 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
                 padding: '2px 4px',
                 borderRadius: '2px',
                 color: 'var(--text-secondary)',
+                cursor: 'pointer',
               }}
             >
               <Copy size={12} />
@@ -541,8 +681,11 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
 
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
+              e.preventDefault();
               onDelete();
             }}
             title="Delete Text Box"
@@ -550,19 +693,65 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
               padding: '2px 4px',
               borderRadius: '2px',
               color: 'var(--danger)',
+              cursor: 'pointer',
             }}
           >
             <Trash2 size={12} />
           </button>
+
+          {/* Quick Sticky Note Color Palette */}
+          {onUpdateStyle && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '3px', marginLeft: '4px', borderLeft: '1px solid var(--border-subtle)', paddingLeft: '5px' }}>
+              {[
+                { bg: 'transparent', border: 'transparent', label: 'Plain' },
+                { bg: '#fef08a', border: '#facc15', label: 'Yellow Sticky' },
+                { bg: '#bbf7d0', border: '#86efac', label: 'Mint Sticky' },
+                { bg: '#bae6fd', border: '#7dd3fc', label: 'Sky Sticky' },
+                { bg: '#fce7f3', border: '#f472b6', label: 'Rose Sticky' },
+                { bg: '#e9d5ff', border: '#c084fc', label: 'Lavender Sticky' },
+                { bg: '#1e293b', border: '#334155', label: 'Dark Card' },
+              ].map((c) => (
+                <button
+                  key={c.bg}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const isDark = c.bg === '#1e293b';
+                    onUpdateStyle({
+                      backgroundColor: c.bg,
+                      borderColor: c.border,
+                      borderRadius: c.bg === 'transparent' ? 6 : 10,
+                      color: isDark ? '#ffffff' : (textBox.color === '#ffffff' ? '#1c1917' : textBox.color),
+                    });
+                  }}
+                  title={c.label}
+                  style={{
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '50%',
+                    backgroundColor: c.bg === 'transparent' ? '#f1f5f9' : c.bg,
+                    border: c.bg === 'transparent' ? '1px dashed #94a3b8' : '1px solid rgba(0,0,0,0.18)',
+                    cursor: 'pointer',
+                    padding: 0,
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Editing Mode: Rich ContentEditable Editor (Retains full bold, colors, headings, lists & tabs) */}
       {isEditing ? (
         <div
+          key="textbox-editor-active"
           ref={editorRef}
           contentEditable={true}
           suppressContentEditableWarning={true}
+          data-placeholder="Type notes here..."
           onInput={handleInput}
           onPaste={handlePaste}
           onBlur={handleBlur}
@@ -573,7 +762,6 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
           style={{
             width: '100%',
             height: '100%',
-            minHeight: `${textBox.height - 14}px`,
             border: 'none',
             outline: 'none',
             background: 'transparent',
@@ -584,9 +772,9 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             fontStyle: textBox.italic ? 'italic' : 'normal',
             textDecoration,
             textAlign: textBox.alignment,
-            lineHeight: 1.5,
+            lineHeight: 1.35,
             whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
+            wordBreak: 'normal',
             overflowWrap: 'break-word',
             padding: 0,
             margin: 0,
@@ -596,13 +784,26 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
       ) : (
         /* Viewing Mode: Renders rich formatted HTML */
         <div
+          key="textbox-viewer-rendered"
+          draggable={false}
+          onDragStart={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
           onClick={(e) => {
+            e.stopPropagation();
+            if (isSelected) {
+              handleStartEdit();
+            } else {
+              onSelect();
+            }
+          }}
+          onDoubleClick={(e) => {
             e.stopPropagation();
             handleStartEdit();
           }}
           style={{
             width: '100%',
-            minHeight: `${textBox.height - 14}px`,
             fontFamily: textBox.fontFamily,
             fontSize: `${textBox.fontSize}px`,
             color: textBox.color,
@@ -610,11 +811,13 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
             fontStyle: textBox.italic ? 'italic' : 'normal',
             textDecoration,
             textAlign: textBox.alignment,
-            lineHeight: 1.5,
+            lineHeight: 1.35,
             whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
+            wordBreak: 'normal',
             overflowWrap: 'break-word',
-            cursor: isSelected ? 'move' : 'text',
+            cursor: isDragging ? 'grabbing' : isSelected ? 'move' : 'pointer',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
           }}
         >
           {isDisplayEmpty ? (
@@ -626,10 +829,15 @@ export const TextBoxItem: React.FC<TextBoxItemProps> = ({
                 userSelect: 'none',
               }}
             >
-              Click to edit...
+              Type notes here...
             </span>
           ) : (
-            <div dangerouslySetInnerHTML={{ __html: displayHtml }} />
+            <div
+              draggable={false}
+              onDragStart={(e) => e.preventDefault()}
+              style={{ pointerEvents: 'none', userSelect: 'none', WebkitUserSelect: 'none' }}
+              dangerouslySetInnerHTML={{ __html: displayHtml }}
+            />
           )}
         </div>
       )}

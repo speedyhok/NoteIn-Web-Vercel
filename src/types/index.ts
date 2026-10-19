@@ -3,7 +3,7 @@
  * Replicates the data architecture decompiled from NoteIn APK (com.orion.penkit & Room entities)
  */
 
-export type ToolType = 'pen' | 'highlighter' | 'eraser' | 'text' | 'pan';
+export type ToolType = 'pen' | 'highlighter' | 'eraser' | 'text' | 'pan' | 'lasso';
 
 export type PenStyle = 'ballpoint' | 'fountain' | 'pencil';
 
@@ -86,6 +86,18 @@ export interface Page {
   updatedAt: number;
 }
 
+
+export interface Folder {
+  id: string;
+  name: string;
+  color: string;
+  colorName?: string;
+  parentId?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  isFavorite?: boolean;
+}
+
 export interface Notebook {
   id: string;
   title: string;
@@ -98,6 +110,12 @@ export interface Notebook {
   pageCount: number;
   importedFrom?: 'pdf' | 'notein' | 'drive' | 'image' | 'word' | 'markdown';
   sourceFilename?: string;
+  category?: string;
+  tags?: string[];
+  isFavorite?: boolean;
+  isTrash?: boolean;
+  strokeCount?: number;
+  folderId?: string | null;
 }
 
 export interface ViewportTransform {

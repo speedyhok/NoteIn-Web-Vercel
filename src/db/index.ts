@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Notebook, Page, Stroke, TextBox, PaperTemplate, PageOrientation } from '../types';
+import type { Folder, Notebook, Page, Stroke, TextBox, PaperTemplate, PageOrientation } from '../types';
 
 export const DEFAULT_A4_WIDTH = 794;
 export const DEFAULT_A4_HEIGHT = 1123;
@@ -24,6 +24,7 @@ export class NoteinDatabase extends Dexie {
   pages!: EntityTable<Page, 'id'>;
   strokes!: EntityTable<Stroke, 'id'>;
   textBoxes!: EntityTable<TextBox, 'id'>;
+  folders!: EntityTable<Folder, 'id'>;
 
   constructor() {
     super('NoteinDatabase');
@@ -34,6 +35,10 @@ export class NoteinDatabase extends Dexie {
     });
     this.version(2).stores({
       textBoxes: '&id, pageId, createdAt, updatedAt',
+    });
+    this.version(3).stores({
+      folders: '&id, name, parentId, createdAt, updatedAt',
+      notebooks: '&id, title, folderId, createdAt, updatedAt',
     });
   }
 }
@@ -60,7 +65,8 @@ export async function createNotebook(
   coverColor: string = '#1d4ed8',
   coverPattern: Notebook['coverPattern'] = 'solid',
   template: PaperTemplate = DEFAULT_TEMPLATE,
-  orientation: PageOrientation = 'portrait'
+  orientation: PageOrientation = 'portrait',
+  folderId?: string | null
 ): Promise<{ notebook: Notebook; initialPage: Page }> {
   const now = Date.now();
   const notebookId = crypto.randomUUID();
@@ -78,6 +84,7 @@ export async function createNotebook(
     createdAt: now,
     updatedAt: now,
     pageCount: 1,
+    ...(folderId ? { folderId } : {}),
   };
 
   const initialPage: Page = {
@@ -438,4 +445,77 @@ export async function initDefaultData(): Promise<void> {
   };
 
   await db.textBoxes.add(welcomeTextBox);
+}
+
+
+// --- Folder Operations (Matching NoteIn APK) ---
+
+export async function getFolders(): Promise<Folder[]> {
+  try {
+    return await db.folders.orderBy('createdAt').toArray();
+  } catch (error) {
+    console.error('Failed to get folders:', error);
+    return [];
+  }
+}
+
+export async function getFolder(id: string): Promise<Folder | undefined> {
+  return await db.folders.get(id);
+}
+
+export async function createFolder(
+  name: string,
+  color: string = '#4E5262',
+  colorName: string = 'Default',
+  parentId: string | null = null
+): Promise<Folder> {
+  const now = Date.now();
+  const folder: Folder = {
+    id: crypto.randomUUID(),
+    name: name.trim(),
+    color,
+    colorName,
+    parentId,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await db.folders.add(folder);
+  return folder;
+}
+
+export async function updateFolder(
+  id: string,
+  updates: Partial<Folder>
+): Promise<Folder | undefined> {
+  await db.folders.update(id, {
+    ...updates,
+    updatedAt: Date.now(),
+  });
+  return await db.folders.get(id);
+}
+
+export async function deleteFolder(id: string): Promise<void> {
+  await db.transaction('rw', db.folders, db.notebooks, async () => {
+    // Unassign notebooks in this folder to root/desktop
+    const nbsInFolder = await db.notebooks.filter((nb) => nb.folderId === id).toArray();
+    for (const nb of nbsInFolder) {
+      await db.notebooks.update(nb.id, { folderId: null, updatedAt: Date.now() });
+    }
+    // Delete subfolders or move them to parent
+    const subfolders = await db.folders.filter((f) => f.parentId === id).toArray();
+    for (const sub of subfolders) {
+      await db.folders.update(sub.id, { parentId: null, updatedAt: Date.now() });
+    }
+    await db.folders.delete(id);
+  });
+}
+
+export async function moveNotebookToFolder(
+  notebookId: string,
+  folderId: string | null
+): Promise<void> {
+  await db.notebooks.update(notebookId, {
+    folderId,
+    updatedAt: Date.now(),
+  });
 }

@@ -7,8 +7,9 @@ import { HistoryManager } from '../../engine/history';
 import { exportNotebookAsNotein } from '../../services/documentImporter';
 import { uploadNotebookToGoogleDrive } from '../../services/googleDriveService';
 import { Toolbar } from './Toolbar';
-import { PaperCanvas } from './PaperCanvas';
+import { PaperCanvas, type ShapeMode } from './PaperCanvas';
 import { PageDrawer } from './PageDrawer';
+import { FeatherLoader } from '../common/FeatherLoader';
 
 interface NoteEditorProps {
   notebook: Notebook;
@@ -27,7 +28,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Pages State
+  // Title & Pages State
+  const [notebookTitle, setNotebookTitle] = useState(notebook.title);
   const [pages, setPages] = useState<Page[]>([]);
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
   const [isPageDrawerOpen, setIsPageDrawerOpen] = useState(false);
@@ -38,6 +40,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   const [activeTool, setActiveTool] = useState<ToolType>('pen');
   const [currentColor, setCurrentColor] = useState<string>('#1d4ed8');
   const [currentWidth, setCurrentWidth] = useState<number>(3);
+  const [shapeMode, setShapeMode] = useState<ShapeMode>('none');
+  const [isRulerActive, setIsRulerActive] = useState<boolean>(false);
+  const [eraseHighlighterOnly, setEraseHighlighterOnly] = useState<boolean>(false);
 
   // Text formatting State
   const [currentFontFamily, setCurrentFontFamily] = useState<string>('Inter, sans-serif');
@@ -205,7 +210,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     saveStrokesTimeoutRef.current = window.setTimeout(async () => {
       try {
         await db.saveStrokesForPage(pageId, updatedStrokes);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to autosave strokes:', err);
       } finally {
         setIsSaving(false);
@@ -222,7 +227,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     saveTextBoxesTimeoutRef.current = window.setTimeout(async () => {
       try {
         await db.saveTextBoxesForPage(pageId, updatedTextBoxes);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to autosave text boxes:', err);
       } finally {
         setIsSaving(false);
@@ -255,13 +260,33 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   // 6. Text Box Operations
   const handleCreateTextBox = (x: number, y: number) => {
     if (!currentPage) return;
+
+    let currentList = textBoxes;
+    if (editingTextBoxId) {
+      const existing = currentList.find((t) => t.id === editingTextBoxId);
+      if (existing) {
+        const activeEl = document.querySelector('[contenteditable="true"]');
+        const cleanContent = activeEl ? activeEl.innerHTML : existing.content;
+        const isBlank = !cleanContent || cleanContent.trim() === '' || cleanContent === '<br>';
+        const hasCustomBg = existing.backgroundColor && existing.backgroundColor !== 'transparent';
+        if (isBlank && !hasCustomBg) {
+          currentList = currentList.filter((t) => t.id !== editingTextBoxId);
+          historyRef.current.push({ type: 'DELETE_TEXT_BOX', textBox: existing });
+        } else if (existing.content !== cleanContent) {
+          const updatedBox: TextBox = { ...existing, content: cleanContent, updatedAt: Date.now() };
+          currentList = currentList.map((t) => (t.id === editingTextBoxId ? updatedBox : t));
+          historyRef.current.push({ type: 'UPDATE_TEXT_BOX', prev: existing, current: updatedBox });
+        }
+      }
+    }
+
     const newBox: TextBox = {
       id: crypto.randomUUID(),
       pageId: currentPage.id,
       x,
       y,
-      width: 240,
-      height: 54,
+      width: currentTextBg && currentTextBg !== 'transparent' ? 180 : 48,
+      height: currentTextBg && currentTextBg !== 'transparent' ? 70 : 26,
       content: '',
       fontFamily: currentFontFamily,
       fontSize: currentFontSize,
@@ -276,12 +301,68 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
       updatedAt: Date.now(),
     };
 
-    const updated = [...textBoxes, newBox];
+    const updated = [...currentList, newBox];
     setTextBoxes(updated);
     setSelectedTextBoxId(newBox.id);
     setEditingTextBoxId(newBox.id);
     historyRef.current.push({ type: 'ADD_TEXT_BOX', textBox: newBox });
     triggerAutosaveTextBoxes(currentPage.id, updated);
+  };
+
+  const handleClearPageStrokes = () => {
+    if (!currentPage || strokes.length === 0) return;
+    if (window.confirm('Clear all handwritten ink on this page? (You can Undo if needed)')) {
+      const oldStrokes = [...strokes];
+      setStrokes([]);
+      historyRef.current.push({
+        type: 'DELETE_STROKES',
+        strokes: oldStrokes,
+      });
+      triggerAutosaveStrokes(currentPage.id, []);
+    }
+  };
+
+  const handleUpdateTextBoxStyle = (id: string, updates: Partial<TextBox>) => {
+    if (!currentPage) return;
+    const existing = textBoxes.find((t) => t.id === id);
+    if (!existing) return;
+    const updatedBox: TextBox = { ...existing, ...updates, updatedAt: Date.now() };
+    const updatedList = textBoxes.map((t) => (t.id === id ? updatedBox : t));
+    setTextBoxes(updatedList);
+    historyRef.current.push({
+      type: 'UPDATE_TEXT_BOX',
+      prev: existing,
+      current: updatedBox,
+    });
+    triggerAutosaveTextBoxes(currentPage.id, updatedList);
+  };
+
+  const handleApplyTextPreset = (preset: {
+    fontFamily?: string;
+    fontSize?: number;
+    bold?: boolean;
+    bg?: string;
+    color?: string;
+  }) => {
+    if (preset.fontFamily) setCurrentFontFamily(preset.fontFamily);
+    if (preset.fontSize) setCurrentFontSize(preset.fontSize);
+    if (preset.bold !== undefined) setIsBold(preset.bold);
+    if (preset.bg) setCurrentTextBg(preset.bg);
+    if (preset.color) setCurrentColor(preset.color);
+
+    if (selectedTextBoxId) {
+      handleUpdateTextBoxStyle(selectedTextBoxId, {
+        ...(preset.fontFamily ? { fontFamily: preset.fontFamily } : {}),
+        ...(preset.fontSize ? { fontSize: preset.fontSize } : {}),
+        ...(preset.bold !== undefined ? { bold: preset.bold } : {}),
+        ...(preset.bg ? {
+          backgroundColor: preset.bg,
+          borderColor: preset.bg === 'transparent' ? 'transparent' : '#cbd5e1',
+          borderRadius: preset.bg === 'transparent' ? 6 : 10,
+        } : {}),
+        ...(preset.color ? { color: preset.color } : {}),
+      });
+    }
   };
 
   const handleEndEditingTextBox = (id: string, newContent: string) => {
@@ -291,7 +372,15 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     const existing = textBoxes.find((t) => t.id === id);
     if (!existing) return;
 
-    const cleanContent = (newContent === 'Click to edit...' || newContent === 'Click to edit') ? '' : newContent;
+    const cleanContent = (newContent === 'Click to edit...' || newContent === 'Click to edit' || newContent === 'Type notes here...') ? '' : newContent;
+    const isBlank = !cleanContent || cleanContent.trim() === '' || cleanContent === '<br>';
+    const hasCustomBg = existing.backgroundColor && existing.backgroundColor !== 'transparent';
+
+    if (isBlank && !hasCustomBg) {
+      handleDeleteTextBox(id);
+      return;
+    }
+
     if (existing.content !== cleanContent) {
       const updatedBox: TextBox = {
         ...existing,
@@ -323,18 +412,22 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     newY: number
   ) => {
     if (!currentPage) return;
-    const target = textBoxes.find((t) => t.id === id);
-    if (!target) return;
+    setTextBoxes((prev) => {
+      const target = prev.find((t) => t.id === id);
+      if (!target) return prev;
 
-    const prevBox: TextBox = { ...target, x: oldX, y: oldY };
-    const currentBox: TextBox = { ...target, x: newX, y: newY, updatedAt: Date.now() };
+      const prevBox: TextBox = { ...target, x: oldX, y: oldY };
+      const currentBox: TextBox = { ...target, x: newX, y: newY, updatedAt: Date.now() };
 
-    historyRef.current.push({
-      type: 'UPDATE_TEXT_BOX',
-      prev: prevBox,
-      current: currentBox,
+      historyRef.current.push({
+        type: 'UPDATE_TEXT_BOX',
+        prev: prevBox,
+        current: currentBox,
+      });
+      const updatedList = prev.map((t) => (t.id === id ? currentBox : t));
+      triggerAutosaveTextBoxes(currentPage.id, updatedList);
+      return updatedList;
     });
-    triggerAutosaveTextBoxes(currentPage.id, textBoxes);
   };
 
   const handleUpdateTextBoxSize = (id: string, newW: number, newH: number) => {
@@ -351,32 +444,38 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     newH: number
   ) => {
     if (!currentPage) return;
-    const target = textBoxes.find((t) => t.id === id);
-    if (!target) return;
+    setTextBoxes((prev) => {
+      const target = prev.find((t) => t.id === id);
+      if (!target) return prev;
 
-    const prevBox: TextBox = { ...target, width: oldW, height: oldH };
-    const currentBox: TextBox = { ...target, width: newW, height: newH, updatedAt: Date.now() };
+      const prevBox: TextBox = { ...target, width: oldW, height: oldH };
+      const currentBox: TextBox = { ...target, width: newW, height: newH, updatedAt: Date.now() };
 
-    historyRef.current.push({
-      type: 'UPDATE_TEXT_BOX',
-      prev: prevBox,
-      current: currentBox,
+      historyRef.current.push({
+        type: 'UPDATE_TEXT_BOX',
+        prev: prevBox,
+        current: currentBox,
+      });
+      const updatedList = prev.map((t) => (t.id === id ? currentBox : t));
+      triggerAutosaveTextBoxes(currentPage.id, updatedList);
+      return updatedList;
     });
-    triggerAutosaveTextBoxes(currentPage.id, textBoxes);
   };
 
-  const handleDeleteTextBox = (id: string) => {
+  const handleDeleteTextBox = useCallback((id: string) => {
     if (!currentPage) return;
-    const target = textBoxes.find((t) => t.id === id);
-    if (!target) return;
+    setTextBoxes((prev) => {
+      const target = prev.find((t) => t.id === id);
+      if (!target) return prev;
 
-    const updated = textBoxes.filter((t) => t.id !== id);
-    setTextBoxes(updated);
-    setSelectedTextBoxId(null);
-    setEditingTextBoxId(null);
-    historyRef.current.push({ type: 'DELETE_TEXT_BOX', textBox: target });
-    triggerAutosaveTextBoxes(currentPage.id, updated);
-  };
+      const updated = prev.filter((t) => t.id !== id);
+      historyRef.current.push({ type: 'DELETE_TEXT_BOX', textBox: target });
+      triggerAutosaveTextBoxes(currentPage.id, updated);
+      return updated;
+    });
+    setSelectedTextBoxId((prev) => (prev === id ? null : prev));
+    setEditingTextBoxId((prev) => (prev === id ? null : prev));
+  }, [currentPage, triggerAutosaveTextBoxes]);
 
   // Format updates for selected text box
   const applyTextFormatting = (key: keyof TextBox, value: any) => {
@@ -475,7 +574,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   const handleExportNotein = async () => {
     try {
       await exportNotebookAsNotein(notebook.id);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Export .notein failed:", err);
     }
   };
@@ -490,10 +589,11 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
         allStrokes.push(...s);
         allTextBoxes.push(...tb);
       }
-      await uploadNotebookToGoogleDrive(notebook, pages, allStrokes, allTextBoxes);
-      alert("✓ Notebook saved and backed up to Google Drive!");
-    } catch (err) {
+      const uploaded = await uploadNotebookToGoogleDrive(notebook, pages, allStrokes, allTextBoxes);
+      alert(`✓ Saved "${uploaded.name}" to your Google Drive!`);
+    } catch (err: any) {
       console.error("Backup to Google Drive failed:", err);
+      alert(`Google Drive backup failed: ${err?.message || err}`);
     }
   };
 
@@ -565,8 +665,16 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
       }
       // Delete selected text box
       else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTextBoxId) {
-        e.preventDefault();
-        handleDeleteTextBox(selectedTextBoxId);
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && (
+          activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          (activeEl as HTMLElement).isContentEditable
+        );
+        if (!isTyping && !editingTextBoxId) {
+          e.preventDefault();
+          handleDeleteTextBox(selectedTextBoxId);
+        }
       }
       // Tool Hotkeys
       else if (e.key === '1') setActiveTool('pen');
@@ -578,7 +686,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo, selectedTextBoxId]);
+  }, [handleUndo, handleRedo, selectedTextBoxId, editingTextBoxId, handleDeleteTextBox]);
 
   // 9. Page Operations
   const handleToggleOrientation = async () => {
@@ -662,8 +770,14 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
       {/* Top Header & Floating Studio Toolbar */}
       {currentPage && (
         <Toolbar
-          notebookTitle={notebook.title}
+          notebookTitle={notebookTitle}
           onBack={onBack}
+          onRenameTitle={async (newTitle) => {
+            if (!newTitle.trim()) return;
+            await db.updateNotebookTitle(notebook.id, newTitle.trim());
+            setNotebookTitle(newTitle.trim());
+            notebook.title = newTitle.trim();
+          }}
           activeTool={activeTool}
           onChangeTool={setActiveTool}
           currentColor={currentColor}
@@ -710,6 +824,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onInsertNumbered={handleInsertNumbered}
           onInsertCode={handleInsertCode}
           onDuplicateTextBox={handleDuplicateTextBox}
+          selectedTextBoxId={selectedTextBoxId}
+          onDeleteTextBox={selectedTextBoxId ? () => handleDeleteTextBox(selectedTextBoxId) : undefined}
           onExportNotein={handleExportNotein}
           onBackupToDrive={handleBackupToDrive}
           pageOrientation={pageOrientation}
@@ -735,6 +851,14 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           isSaving={isSaving}
           isDarkMode={isDarkMode}
           onToggleTheme={onToggleTheme}
+          shapeMode={shapeMode}
+          onChangeShapeMode={setShapeMode}
+          isRulerActive={isRulerActive}
+          onToggleRuler={() => setIsRulerActive((prev) => !prev)}
+          eraseHighlighterOnly={eraseHighlighterOnly}
+          onToggleEraseHighlighterOnly={() => setEraseHighlighterOnly((prev) => !prev)}
+          onClearPage={handleClearPageStrokes}
+          onApplyTextPreset={handleApplyTextPreset}
         />
       )}
 
@@ -755,7 +879,12 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onCreateTextBox={handleCreateTextBox}
           selectedTextBoxId={selectedTextBoxId}
           editingTextBoxId={editingTextBoxId}
-          onSelectTextBox={setSelectedTextBoxId}
+          onSelectTextBox={(id) => {
+            setSelectedTextBoxId(id);
+            if (!id) {
+              setEditingTextBoxId(null);
+            }
+          }}
           onStartEditingTextBox={(id) => {
             setSelectedTextBoxId(id);
             setEditingTextBoxId(id);
@@ -768,10 +897,16 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onDeleteTextBox={handleDeleteTextBox}
           onDuplicateTextBox={handleDuplicateTextBox}
           isDarkMode={isDarkMode}
+          shapeMode={shapeMode}
+          isRulerActive={isRulerActive}
+          onCloseRuler={() => setIsRulerActive(false)}
+          eraseHighlighterOnly={eraseHighlighterOnly}
+          onSelectTool={setActiveTool}
+          onUpdateTextBoxStyle={handleUpdateTextBoxStyle}
         />
       ) : (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
-          Loading page...
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+          <FeatherLoader message="Loading Page..." size={72} />
         </div>
       )}
 
