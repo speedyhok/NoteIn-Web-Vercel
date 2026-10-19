@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { Notebook, PaperTemplate } from './types';
+import type { Notebook, PaperTemplate, PageOrientation } from './types';
 import * as db from './db';
 import { NotebookLibrary } from './components/library/NotebookLibrary';
 import { NoteEditor } from './components/editor/NoteEditor';
@@ -29,22 +29,23 @@ export function App() {
   const refreshNotebooks = async () => {
     const loaded = await db.getNotebooks();
     setNotebooks(loaded);
-    if (activeNotebook) {
-      const refreshedActive = loaded.find((nb) => nb.id === activeNotebook.id);
-      if (refreshedActive) {
-        setActiveNotebook(refreshedActive);
-      }
-    }
+    setActiveNotebook((prevActive) => {
+      if (!prevActive) return null;
+      const found = loaded.find((nb) => nb.id === prevActive.id);
+      return found || null;
+    });
   };
 
   const handleCreateNotebook = async (
     title: string,
     color: string,
     coverPattern: Notebook['coverPattern'] = 'solid',
-    template: PaperTemplate
+    template: PaperTemplate,
+    orientation: PageOrientation = 'portrait'
   ) => {
-    const { notebook } = await db.createNotebook(title, color, coverPattern, template);
-    await refreshNotebooks();
+    const { notebook } = await db.createNotebook(title, color, coverPattern, template, orientation);
+    const loaded = await db.getNotebooks();
+    setNotebooks(loaded);
     setActiveNotebook(notebook);
   };
 
@@ -55,10 +56,14 @@ export function App() {
 
   const handleDeleteNotebook = async (notebookId: string) => {
     await db.deleteNotebook(notebookId);
-    if (activeNotebook?.id === notebookId) {
-      setActiveNotebook(null);
-    }
+    setActiveNotebook((prev) => (prev?.id === notebookId ? null : prev));
     await refreshNotebooks();
+  };
+
+  const handleBackToLibrary = async () => {
+    setActiveNotebook(null);
+    const loaded = await db.getNotebooks();
+    setNotebooks(loaded);
   };
 
   return (
@@ -66,10 +71,7 @@ export function App() {
       {activeNotebook ? (
         <NoteEditor
           notebook={activeNotebook}
-          onBack={() => {
-            setActiveNotebook(null);
-            refreshNotebooks();
-          }}
+          onBack={handleBackToLibrary}
           isDarkMode={isDarkMode}
           onToggleTheme={() => setIsDarkMode(!isDarkMode)}
         />

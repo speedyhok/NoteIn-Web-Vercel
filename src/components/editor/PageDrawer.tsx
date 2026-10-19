@@ -114,7 +114,7 @@ export const PageDrawer: React.FC<PageDrawerProps> = ({
                   }}
                   style={{
                     position: 'relative',
-                    aspectRatio: '794 / 1123',
+                    aspectRatio: `${p.width || 794} / ${p.height || 1123}`,
                     borderRadius: 'var(--radius-md)',
                     backgroundColor: p.template.bgColor || '#ffffff',
                     border: isCurrent ? '2px solid var(--accent-primary)' : '1px solid var(--border-strong)',
@@ -133,9 +133,22 @@ export const PageDrawer: React.FC<PageDrawerProps> = ({
                     if (!isCurrent) e.currentTarget.style.borderColor = 'var(--border-strong)';
                   }}
                 >
-                  {/* Miniature template indication */}
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'capitalize' }}>
-                    {p.template.type}
+                  {/* Miniature template indication & orientation */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'capitalize' }}>
+                      {p.template.type}
+                    </span>
+                    <span style={{
+                      fontSize: '9px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      color: 'var(--text-tertiary)',
+                      backgroundColor: 'rgba(0,0,0,0.06)',
+                      padding: '1px 5px',
+                      borderRadius: '4px'
+                    }}>
+                      {p.orientation || (p.width > p.height ? 'landscape' : 'portrait')}
+                    </span>
                   </div>
 
                   {/* Page number badge */}

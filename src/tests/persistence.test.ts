@@ -13,6 +13,8 @@ import {
   duplicatePage,
   deletePage,
   updatePageTemplate,
+  updatePageOrientation,
+  DEFAULT_TEMPLATE,
   saveStrokesForPage,
   getStrokesForPage,
   saveTextBoxesForPage,
@@ -222,6 +224,42 @@ describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
     });
   });
 
+  
+  describe('Page Orientation and Landscape Mode', () => {
+    it('creates a notebook in landscape mode with inverted dimensions', async () => {
+      const { notebook, initialPage } = await createNotebook('Landscape Notebook', '#1d4ed8', 'solid', DEFAULT_TEMPLATE, 'landscape');
+      expect(notebook.orientation).toBe('landscape');
+      expect(initialPage.orientation).toBe('landscape');
+      expect(initialPage.width).toBe(1123);
+      expect(initialPage.height).toBe(794);
+    });
+
+    it('toggles page orientation between portrait and landscape dynamically', async () => {
+      const { initialPage } = await createNotebook('Orientation Switcher');
+      expect(initialPage.orientation).toBe('portrait');
+      expect(initialPage.width).toBe(794);
+      expect(initialPage.height).toBe(1123);
+
+      // Switch to landscape
+      const landscapePage = await updatePageOrientation(initialPage.id, 'landscape');
+      expect(landscapePage?.orientation).toBe('landscape');
+      expect(landscapePage?.width).toBe(1123);
+      expect(landscapePage?.height).toBe(794);
+
+      // Verify DB persistence
+      const fetchedPage = await getPage(initialPage.id);
+      expect(fetchedPage?.orientation).toBe('landscape');
+      expect(fetchedPage?.width).toBe(1123);
+      expect(fetchedPage?.height).toBe(794);
+
+      // Switch back to portrait
+      const portraitPage = await updatePageOrientation(initialPage.id, 'portrait');
+      expect(portraitPage?.orientation).toBe('portrait');
+      expect(portraitPage?.width).toBe(794);
+      expect(portraitPage?.height).toBe(1123);
+    });
+  });
+
   describe('Text Box Persistence', () => {
     it('saves and retrieves text boxes with all formatting fields', async () => {
       const { initialPage } = await createNotebook('Text Notebook');
@@ -255,6 +293,45 @@ describe('IndexedDB Persistence (Dexie Storage Layer)', () => {
       expect(loaded[0].bold).toBe(true);
       expect(loaded[0].italic).toBe(true);
       expect(loaded[0].alignment).toBe('center');
+    });
+
+    
+    it('persists advanced text formatting (underline, strikethrough, background cards, lists)', async () => {
+      const { initialPage } = await createNotebook('Advanced Text Test');
+
+      const advancedBox: TextBox = {
+        id: 'tb-adv-1',
+        pageId: initialPage.id,
+        x: 50,
+        y: 100,
+        width: 280,
+        height: 120,
+        content: '• Key note item\n• Action checklist',
+        fontFamily: 'Inter',
+        fontSize: 16,
+        color: '#1e293b',
+        bold: true,
+        italic: false,
+        underline: true,
+        strikethrough: false,
+        alignment: 'justify',
+        backgroundColor: '#fef3c7',
+        borderColor: '#f59e0b',
+        isBulletList: true,
+        isNumberedList: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      await saveTextBoxesForPage(initialPage.id, [advancedBox]);
+      const loaded = await getTextBoxesForPage(initialPage.id);
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].underline).toBe(true);
+      expect(loaded[0].strikethrough).toBe(false);
+      expect(loaded[0].backgroundColor).toBe('#fef3c7');
+      expect(loaded[0].borderColor).toBe('#f59e0b');
+      expect(loaded[0].isBulletList).toBe(true);
+      expect(loaded[0].alignment).toBe('justify');
     });
 
     it('initializes default welcome data with both vector strokes and text box', async () => {

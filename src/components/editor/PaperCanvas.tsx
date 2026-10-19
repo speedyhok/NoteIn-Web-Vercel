@@ -31,6 +31,7 @@ interface PaperCanvasProps {
   onUpdateTextBoxSize: (id: string, newW: number, newH: number) => void;
   onCommitTextBoxSize: (id: string, oldW: number, oldH: number, newW: number, newH: number) => void;
   onDeleteTextBox: (id: string) => void;
+  onDuplicateTextBox?: (id: string) => void;
   isDarkMode: boolean;
 }
 
@@ -57,6 +58,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   onUpdateTextBoxSize,
   onCommitTextBoxSize,
   onDeleteTextBox,
+  onDuplicateTextBox,
   isDarkMode,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -428,6 +430,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
           onUpdateSize={onUpdateTextBoxSize}
           onCommitSize={onCommitTextBoxSize}
           onDeleteTextBox={onDeleteTextBox}
+          onDuplicateTextBox={onDuplicateTextBox}
           zoom={transform.zoom}
         />
       </div>

@@ -1,8 +1,15 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Notebook, Page, Stroke, TextBox, PaperTemplate } from '../types';
+import type { Notebook, Page, Stroke, TextBox, PaperTemplate, PageOrientation } from '../types';
 
 export const DEFAULT_A4_WIDTH = 794;
 export const DEFAULT_A4_HEIGHT = 1123;
+
+export function getPageDimensions(orientation: PageOrientation = 'portrait'): { width: number; height: number } {
+  if (orientation === 'landscape') {
+    return { width: DEFAULT_A4_HEIGHT, height: DEFAULT_A4_WIDTH };
+  }
+  return { width: DEFAULT_A4_WIDTH, height: DEFAULT_A4_HEIGHT };
+}
 
 export const DEFAULT_TEMPLATE: PaperTemplate = {
   type: 'ruled',
@@ -50,13 +57,16 @@ export async function getNotebook(id: string): Promise<Notebook | undefined> {
 
 export async function createNotebook(
   title: string,
-  coverColor: string = '#2563eb',
+  coverColor: string = '#1d4ed8',
   coverPattern: Notebook['coverPattern'] = 'solid',
-  template: PaperTemplate = DEFAULT_TEMPLATE
+  template: PaperTemplate = DEFAULT_TEMPLATE,
+  orientation: PageOrientation = 'portrait'
 ): Promise<{ notebook: Notebook; initialPage: Page }> {
   const now = Date.now();
   const notebookId = crypto.randomUUID();
   const pageId = crypto.randomUUID();
+
+  const dims = getPageDimensions(orientation);
 
   const notebook: Notebook = {
     id: notebookId,
@@ -64,6 +74,7 @@ export async function createNotebook(
     coverColor,
     coverPattern,
     defaultTemplate: template,
+    orientation,
     createdAt: now,
     updatedAt: now,
     pageCount: 1,
@@ -75,8 +86,9 @@ export async function createNotebook(
     pageNumber: 1,
     title: 'Page 1',
     template,
-    width: DEFAULT_A4_WIDTH,
-    height: DEFAULT_A4_HEIGHT,
+    width: dims.width,
+    height: dims.height,
+    orientation,
     createdAt: now,
     updatedAt: now,
   };
@@ -123,12 +135,20 @@ export async function getPage(id: string): Promise<Page | undefined> {
 
 export async function createPage(
   notebookId: string,
-  template?: PaperTemplate
+  template?: PaperTemplate,
+  orientation?: PageOrientation
 ): Promise<Page> {
   const now = Date.now();
   const existingPages = await getPagesForNotebook(notebookId);
   const nextNumber = existingPages.length + 1;
   const notebook = await getNotebook(notebookId);
+
+  const targetOrientation =
+    orientation ||
+    (existingPages.length > 0 ? existingPages[existingPages.length - 1].orientation : notebook?.orientation) ||
+    'portrait';
+
+  const dims = getPageDimensions(targetOrientation);
 
   const page: Page = {
     id: crypto.randomUUID(),
@@ -136,8 +156,9 @@ export async function createPage(
     pageNumber: nextNumber,
     title: `Page ${nextNumber}`,
     template: template || notebook?.defaultTemplate || DEFAULT_TEMPLATE,
-    width: DEFAULT_A4_WIDTH,
-    height: DEFAULT_A4_HEIGHT,
+    width: dims.width,
+    height: dims.height,
+    orientation: targetOrientation,
     createdAt: now,
     updatedAt: now,
   };
@@ -151,6 +172,26 @@ export async function createPage(
   });
 
   return page;
+}
+
+export async function updatePageOrientation(
+  pageId: string,
+  orientation: PageOrientation
+): Promise<Page | undefined> {
+  const page = await db.pages.get(pageId);
+  if (!page) return undefined;
+
+  const dims = getPageDimensions(orientation);
+  const now = Date.now();
+
+  await db.pages.update(pageId, {
+    orientation,
+    width: dims.width,
+    height: dims.height,
+    updatedAt: now,
+  });
+
+  return await db.pages.get(pageId);
 }
 
 export async function duplicatePage(pageId: string): Promise<Page | undefined> {
@@ -174,6 +215,9 @@ export async function duplicatePage(pageId: string): Promise<Page | undefined> {
       id: newPageId,
       pageNumber: targetNumber,
       title: `${sourcePage.title} (Copy)`,
+      orientation: sourcePage.orientation || 'portrait',
+      width: sourcePage.width,
+      height: sourcePage.height,
       createdAt: now,
       updatedAt: now,
     };
@@ -324,7 +368,7 @@ export async function initDefaultData(): Promise<void> {
 
   const { initialPage } = await createNotebook(
     'Getting Started with NoteIn',
-    '#2563eb',
+    '#1d4ed8',
     'marble',
     {
       type: 'ruled',
@@ -332,7 +376,8 @@ export async function initDefaultData(): Promise<void> {
       gridSize: 20,
       patternColor: '#bfdbfe',
       bgColor: '#ffffff',
-    }
+    },
+    'portrait'
   );
 
   // Add welcome sample vector strokes
@@ -382,7 +427,7 @@ export async function initDefaultData(): Promise<void> {
     width: 450,
     height: 80,
     content: 'Welcome to NoteIn Web!\nUse the Pen, Highlighter, Eraser, or click the Text tool to type anywhere.',
-    fontFamily: 'Inter',
+    fontFamily: 'Inter, sans-serif',
     fontSize: 16,
     color: '#1e293b',
     bold: false,

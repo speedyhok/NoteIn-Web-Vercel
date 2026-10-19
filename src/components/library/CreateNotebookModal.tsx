@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Modal } from '../common/Modal';
-import type { PaperType, PaperTemplate, Notebook } from '../../types';
-import { Check } from 'lucide-react';
+import type { PaperType, PaperTemplate, Notebook, PageOrientation } from '../../types';
+import { Check, RectangleVertical, RectangleHorizontal } from 'lucide-react';
 
 interface CreateNotebookModalProps {
   isOpen: boolean;
@@ -10,7 +10,8 @@ interface CreateNotebookModalProps {
     title: string,
     color: string,
     coverPattern: Notebook['coverPattern'],
-    template: PaperTemplate
+    template: PaperTemplate,
+    orientation: PageOrientation
   ) => void;
 }
 
@@ -46,6 +47,7 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
   const [title, setTitle] = useState('');
   const [selectedColor, setSelectedColor] = useState(COVER_COLORS[0].value);
   const [selectedPattern, setSelectedPattern] = useState<Notebook['coverPattern']>('solid');
+  const [selectedOrientation, setSelectedOrientation] = useState<PageOrientation>('portrait');
   const [selectedPaper, setSelectedPaper] = useState<PaperType>('ruled');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -59,7 +61,13 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
       bgColor: '#ffffff',
     };
 
-    onCreate(title.trim() || 'Untitled Notebook', selectedColor, selectedPattern, template);
+    onCreate(
+      title.trim() || 'Untitled Notebook',
+      selectedColor,
+      selectedPattern,
+      template,
+      selectedOrientation
+    );
     setTitle('');
     onClose();
   };
@@ -69,7 +77,7 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       title="Create New Notebook"
-      maxWidth="500px"
+      maxWidth="520px"
       footer={
         <>
           <button
@@ -101,7 +109,7 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
         </>
       }
     >
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
         {/* Notebook Title Input */}
         <div>
           <label
@@ -110,14 +118,14 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
               fontSize: '13px',
               fontWeight: 600,
               color: 'var(--text-secondary)',
-              marginBottom: '8px',
+              marginBottom: '6px',
             }}
           >
             Notebook Title
           </label>
           <input
             type="text"
-            placeholder="e.g. Physics Lecture Notes, Journal..."
+            id="new-notebook-title-input" placeholder="e.g. Physics Lecture Notes, Journal..."
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             autoFocus
@@ -137,6 +145,62 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
           />
         </div>
 
+        {/* Page Orientation Selector */}
+        <div>
+          <label
+            style={{
+              display: 'block',
+              fontSize: '13px',
+              fontWeight: 600,
+              color: 'var(--text-secondary)',
+              marginBottom: '6px',
+            }}
+          >
+            Page Orientation
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div
+              id="orientation-portrait-btn" role="button" tabIndex={0} onClick={() => setSelectedOrientation('portrait')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-md)',
+                border: selectedOrientation === 'portrait' ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+                backgroundColor: selectedOrientation === 'portrait' ? 'var(--accent-light)' : 'var(--bg-primary)',
+                cursor: 'pointer',
+              }}
+            >
+              <RectangleVertical size={20} color={selectedOrientation === 'portrait' ? 'var(--accent-primary)' : 'var(--text-secondary)'} />
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>Portrait</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>794 × 1123 pt (Vertical)</div>
+              </div>
+            </div>
+
+            <div
+              id="orientation-landscape-btn" role="button" tabIndex={0} onClick={() => setSelectedOrientation('landscape')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-md)',
+                border: selectedOrientation === 'landscape' ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+                backgroundColor: selectedOrientation === 'landscape' ? 'var(--accent-light)' : 'var(--bg-primary)',
+                cursor: 'pointer',
+              }}
+            >
+              <RectangleHorizontal size={20} color={selectedOrientation === 'landscape' ? 'var(--accent-primary)' : 'var(--text-secondary)'} />
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>Landscape</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>1123 × 794 pt (Horizontal)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Cover Color Selector */}
         <div>
           <label
@@ -145,7 +209,7 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
               fontSize: '13px',
               fontWeight: 600,
               color: 'var(--text-secondary)',
-              marginBottom: '8px',
+              marginBottom: '6px',
             }}
           >
             Cover Color
@@ -181,7 +245,7 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
               fontSize: '13px',
               fontWeight: 600,
               color: 'var(--text-secondary)',
-              marginBottom: '8px',
+              marginBottom: '6px',
             }}
           >
             Cover Texture
@@ -217,7 +281,7 @@ export const CreateNotebookModal: React.FC<CreateNotebookModalProps> = ({
               fontSize: '13px',
               fontWeight: 600,
               color: 'var(--text-secondary)',
-              marginBottom: '8px',
+              marginBottom: '6px',
             }}
           >
             Default Paper Template

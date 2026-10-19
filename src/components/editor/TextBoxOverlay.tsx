@@ -14,6 +14,7 @@ interface TextBoxOverlayProps {
   onUpdateSize: (id: string, newW: number, newH: number) => void;
   onCommitSize: (id: string, oldW: number, oldH: number, newW: number, newH: number) => void;
   onDeleteTextBox: (id: string) => void;
+  onDuplicateTextBox?: (id: string) => void;
   zoom: number;
 }
 
@@ -29,6 +30,7 @@ export const TextBoxOverlay: React.FC<TextBoxOverlayProps> = ({
   onUpdateSize,
   onCommitSize,
   onDeleteTextBox,
+  onDuplicateTextBox,
   zoom,
 }) => {
   return (
@@ -36,7 +38,7 @@ export const TextBoxOverlay: React.FC<TextBoxOverlayProps> = ({
       style={{
         position: 'absolute',
         inset: 0,
-        pointerEvents: 'none', // children enable pointerEvents
+        pointerEvents: 'none',
       }}
     >
       {textBoxes.map((tb) => (
@@ -57,6 +59,7 @@ export const TextBoxOverlay: React.FC<TextBoxOverlayProps> = ({
               onCommitSize(tb.id, oldW, oldH, newW, newH)
             }
             onDelete={() => onDeleteTextBox(tb.id)}
+            onDuplicate={onDuplicateTextBox ? () => onDuplicateTextBox(tb.id) : undefined}
             zoom={zoom}
           />
         </div>

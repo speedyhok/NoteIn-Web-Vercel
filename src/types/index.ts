@@ -9,6 +9,8 @@ export type PenStyle = 'ballpoint' | 'fountain' | 'pencil';
 
 export type PaperType = 'blank' | 'ruled' | 'grid' | 'dotted' | 'cornell';
 
+export type PageOrientation = 'portrait' | 'landscape';
+
 export interface Point {
   x: number;
   y: number;
@@ -49,7 +51,14 @@ export interface TextBox {
   color: string;       // HEX
   bold: boolean;
   italic: boolean;
-  alignment: 'left' | 'center' | 'right';
+  underline?: boolean;
+  strikethrough?: boolean;
+  alignment: 'left' | 'center' | 'right' | 'justify';
+  backgroundColor?: string; // e.g. 'transparent', '#fef3c7', '#eff6ff', '#f3f4f6'
+  borderColor?: string;     // e.g. 'transparent', '#cbd5e1', '#3b82f6'
+  borderRadius?: number;
+  isBulletList?: boolean;
+  isNumberedList?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -68,8 +77,9 @@ export interface Page {
   pageNumber: number;
   title: string;
   template: PaperTemplate;
-  width: number;       // Standard A4 width in pt: 794
-  height: number;      // Standard A4 height in pt: 1123
+  width: number;       // Standard A4: 794 (portrait) or 1123 (landscape)
+  height: number;      // Standard A4: 1123 (portrait) or 794 (landscape)
+  orientation: PageOrientation;
   isUnbounded?: boolean;
   createdAt: number;
   updatedAt: number;
@@ -81,6 +91,7 @@ export interface Notebook {
   coverColor: string;
   coverPattern: 'solid' | 'marble' | 'minimal' | 'gradient';
   defaultTemplate: PaperTemplate;
+  orientation?: PageOrientation;
   createdAt: number;
   updatedAt: number;
   pageCount: number;

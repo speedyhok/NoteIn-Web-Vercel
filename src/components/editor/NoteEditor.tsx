@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { Notebook, Page, Stroke, TextBox, ToolType, ViewportTransform, PaperTemplate } from '../../types';
+import type { Notebook, Page, Stroke, TextBox, ToolType, ViewportTransform, PaperTemplate, PageOrientation } from '../../types';
 import * as db from '../../db';
 import { fitPageToContainer } from '../../engine/transform';
 import { HistoryManager } from '../../engine/history';
@@ -33,7 +33,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
   const [activeTool, setActiveTool] = useState<ToolType>('pen');
-  const [currentColor, setCurrentColor] = useState<string>('#1e40af');
+  const [currentColor, setCurrentColor] = useState<string>('#1d4ed8');
   const [currentWidth, setCurrentWidth] = useState<number>(3);
 
   // Text formatting State
@@ -41,7 +41,10 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   const [currentFontSize, setCurrentFontSize] = useState<number>(16);
   const [isBold, setIsBold] = useState<boolean>(false);
   const [isItalic, setIsItalic] = useState<boolean>(false);
-  const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('left');
+  const [isUnderline, setIsUnderline] = useState<boolean>(false);
+  const [isStrikethrough, setIsStrikethrough] = useState<boolean>(false);
+  const [alignment, setAlignment] = useState<'left' | 'center' | 'right' | 'justify'>('left');
+  const [currentTextBg, setCurrentTextBg] = useState<string>('transparent');
 
   // Text Selection State
   const [selectedTextBoxId, setSelectedTextBoxId] = useState<string | null>(null);
@@ -66,6 +69,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
 
   // Current Page Derived
   const currentPage = pages[currentPageIndex] || null;
+  const pageOrientation: PageOrientation =
+    currentPage?.orientation || (currentPage && currentPage.width > currentPage.height ? 'landscape' : 'portrait');
 
   // Subscribe to HistoryManager changes for reactive undo/redo state
   useEffect(() => {
@@ -76,13 +81,30 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     return unsubscribe;
   }, []);
 
+  // Sync toolbar formatting with selected text box
+  useEffect(() => {
+    if (!selectedTextBoxId) return;
+    const selectedBox = textBoxes.find((t) => t.id === selectedTextBoxId);
+    if (selectedBox) {
+      setCurrentFontFamily(selectedBox.fontFamily);
+      setCurrentFontSize(selectedBox.fontSize);
+      setIsBold(selectedBox.bold);
+      setIsItalic(selectedBox.italic);
+      setIsUnderline(!!selectedBox.underline);
+      setIsStrikethrough(!!selectedBox.strikethrough);
+      setAlignment(selectedBox.alignment || 'left');
+      setCurrentTextBg(selectedBox.backgroundColor || 'transparent');
+      setCurrentColor(selectedBox.color);
+    }
+  }, [selectedTextBoxId, textBoxes]);
+
   // 1. Load Notebook Pages
   useEffect(() => {
     let isMounted = true;
     db.getPagesForNotebook(notebook.id).then((loadedPages) => {
       if (!isMounted) return;
       if (loadedPages.length === 0) {
-        db.createPage(notebook.id).then((newPage) => {
+        db.createPage(notebook.id, undefined, notebook.orientation || 'portrait').then((newPage) => {
           if (isMounted) {
             setPages([newPage]);
             setCurrentPageIndex(0);
@@ -102,7 +124,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [notebook.id, initialPageId]);
+  }, [notebook.id, initialPageId, notebook.orientation]);
 
   // 2. Load Strokes and TextBoxes for Active Page
   useEffect(() => {
@@ -129,7 +151,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     };
   }, [currentPage?.id]);
 
-  // 3. Auto-fit Page on Initial Mount and Window Resize
+  // 3. Auto-fit Page on Initial Mount, Window Resize, and Orientation change
   const handleFitPage = useCallback(() => {
     if (!containerRef.current || !currentPage) return;
     const { clientWidth, clientHeight } = containerRef.current;
@@ -226,7 +248,10 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
       color: currentColor,
       bold: isBold,
       italic: isItalic,
+      underline: isUnderline,
+      strikethrough: isStrikethrough,
       alignment,
+      backgroundColor: currentTextBg,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -245,8 +270,6 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
 
     const existing = textBoxes.find((t) => t.id === id);
     if (!existing) return;
-
-    
 
     if (existing.content !== newContent) {
       const updatedBox: TextBox = {
@@ -355,6 +378,75 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     triggerAutosaveTextBoxes(currentPage.id, updatedList);
   };
 
+  const handleToggleUnderline = () => {
+    const next = !isUnderline;
+    setIsUnderline(next);
+    applyTextFormatting('underline', next);
+  };
+
+  const handleToggleStrikethrough = () => {
+    const next = !isStrikethrough;
+    setIsStrikethrough(next);
+    applyTextFormatting('strikethrough', next);
+  };
+
+  const handleChangeTextBg = (bg: string) => {
+    setCurrentTextBg(bg);
+    applyTextFormatting('backgroundColor', bg);
+  };
+
+  const handleInsertBullet = () => {
+    if (!selectedTextBoxId || !currentPage) return;
+    const target = textBoxes.find((t) => t.id === selectedTextBoxId);
+    if (!target) return;
+
+    const lines = target.content.split('\n');
+    const bulleted = lines.map((l) => (l.startsWith('• ') ? l.substring(2) : `• ${l}`)).join('\n');
+    const updatedBox: TextBox = { ...target, content: bulleted, updatedAt: Date.now() };
+    const updatedList = textBoxes.map((t) => (t.id === selectedTextBoxId ? updatedBox : t));
+    setTextBoxes(updatedList);
+    historyRef.current.push({ type: 'UPDATE_TEXT_BOX', prev: target, current: updatedBox });
+    triggerAutosaveTextBoxes(currentPage.id, updatedList);
+  };
+
+  const handleInsertNumbered = () => {
+    if (!selectedTextBoxId || !currentPage) return;
+    const target = textBoxes.find((t) => t.id === selectedTextBoxId);
+    if (!target) return;
+
+    const lines = target.content.split('\n');
+    const numbered = lines.map((l, i) => {
+      const clean = l.replace(/^\d+\.\s*/, '');
+      return `${i + 1}. ${clean}`;
+    }).join('\n');
+    const updatedBox: TextBox = { ...target, content: numbered, updatedAt: Date.now() };
+    const updatedList = textBoxes.map((t) => (t.id === selectedTextBoxId ? updatedBox : t));
+    setTextBoxes(updatedList);
+    historyRef.current.push({ type: 'UPDATE_TEXT_BOX', prev: target, current: updatedBox });
+    triggerAutosaveTextBoxes(currentPage.id, updatedList);
+  };
+
+  const handleDuplicateTextBox = (id?: string) => {
+    const targetId = id || selectedTextBoxId;
+    if (!targetId || !currentPage) return;
+    const target = textBoxes.find((t) => t.id === targetId);
+    if (!target) return;
+
+    const cloned: TextBox = {
+      ...target,
+      id: crypto.randomUUID(),
+      x: target.x + 24,
+      y: target.y + 24,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const updatedList = [...textBoxes, cloned];
+    setTextBoxes(updatedList);
+    setSelectedTextBoxId(cloned.id);
+    historyRef.current.push({ type: 'ADD_TEXT_BOX', textBox: cloned });
+    triggerAutosaveTextBoxes(currentPage.id, updatedList);
+  };
+
   // 7. Undo / Redo
   const handleUndo = useCallback(() => {
     if (!currentPage || !historyRef.current.canUndo()) return;
@@ -418,8 +510,32 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   }, [handleUndo, handleRedo, selectedTextBoxId]);
 
   // 9. Page Operations
+  const handleToggleOrientation = async () => {
+    if (!currentPage) return;
+    const nextOrientation: PageOrientation = pageOrientation === 'portrait' ? 'landscape' : 'portrait';
+    const updated = await db.updatePageOrientation(currentPage.id, nextOrientation);
+    if (updated) {
+      const updatedPages = await db.getPagesForNotebook(notebook.id);
+      setPages(updatedPages);
+      if (containerRef.current) {
+        const { clientWidth, clientHeight } = containerRef.current;
+        const newTransform = fitPageToContainer(
+          updated.width,
+          updated.height,
+          clientWidth,
+          clientHeight,
+          80
+        );
+        setTransform({
+          ...newTransform,
+          panY: Math.max(50, newTransform.panY),
+        });
+      }
+    }
+  };
+
   const handleAddPage = async () => {
-    const newPage = await db.createPage(notebook.id, currentPage?.template);
+    const newPage = await db.createPage(notebook.id, currentPage?.template, pageOrientation);
     const updatedPages = await db.getPagesForNotebook(notebook.id);
     setPages(updatedPages);
     const newIndex = updatedPages.findIndex((p) => p.id === newPage.id);
@@ -512,11 +628,22 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
             setIsItalic(next);
             applyTextFormatting('italic', next);
           }}
+          isUnderline={isUnderline}
+          onToggleUnderline={handleToggleUnderline}
+          isStrikethrough={isStrikethrough}
+          onToggleStrikethrough={handleToggleStrikethrough}
           alignment={alignment}
           onChangeAlignment={(align) => {
             setAlignment(align);
             applyTextFormatting('alignment', align);
           }}
+          currentTextBg={currentTextBg}
+          onChangeTextBg={handleChangeTextBg}
+          onInsertBullet={handleInsertBullet}
+          onInsertNumbered={handleInsertNumbered}
+          onDuplicateTextBox={handleDuplicateTextBox}
+          pageOrientation={pageOrientation}
+          onToggleOrientation={handleToggleOrientation}
           canUndo={canUndo}
           canRedo={canRedo}
           onUndo={handleUndo}
@@ -568,6 +695,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onUpdateTextBoxSize={handleUpdateTextBoxSize}
           onCommitTextBoxSize={handleCommitTextBoxSize}
           onDeleteTextBox={handleDeleteTextBox}
+          onDuplicateTextBox={handleDuplicateTextBox}
           isDarkMode={isDarkMode}
         />
       ) : (

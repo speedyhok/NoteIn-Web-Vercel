@@ -20,7 +20,8 @@ interface NotebookLibraryProps {
     title: string,
     coverColor: string,
     coverPattern: Notebook['coverPattern'],
-    template: PaperTemplate
+    template: PaperTemplate,
+    orientation: import("../../types").PageOrientation
   ) => void;
   onRenameNotebook: (id: string, newTitle: string) => void;
   onDeleteNotebook: (id: string) => void;
