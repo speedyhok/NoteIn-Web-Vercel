@@ -58,6 +58,8 @@ import {
   Trash2,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Edit2,
 } from 'lucide-react';
 import { ColorPicker } from './ColorPicker';
@@ -206,6 +208,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   isCoverMode = false,
   currentPageIndex,
   totalPages,
+  onPrevPage,
+  onNextPage,
   onAddPage,
   onTogglePageDrawer,
   currentTemplate,
@@ -483,29 +487,80 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         {/* Right Action Buttons */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {/* Page Counter & Drawer Toggle */}
-          <button
-            onClick={onTogglePageDrawer}
+          {/* Page Navigation & Thumbnails Group */}
+          <div
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
-              padding: '5px 10px',
+              backgroundColor: 'var(--bg-tertiary)',
               borderRadius: '8px',
               border: '1px solid var(--border-subtle)',
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
+              overflow: 'hidden',
             }}
-            title="View Page Thumbnails"
           >
-            <LayoutGrid size={14} />
-            <span>
-              {currentPageIndex + 1} / {totalPages}
-            </span>
-          </button>
+            {/* Previous Page Button */}
+            <button
+              onClick={onPrevPage}
+              disabled={currentPageIndex <= 0}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '5px 7px',
+                background: 'transparent',
+                border: 'none',
+                color: currentPageIndex <= 0 ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+                cursor: currentPageIndex <= 0 ? 'not-allowed' : 'pointer',
+              }}
+              title="Previous Page"
+            >
+              <ChevronLeft size={14} />
+            </button>
+
+            {/* Current Page / Overview */}
+            <button
+              onClick={onTogglePageDrawer}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '5px 8px',
+                background: 'transparent',
+                border: 'none',
+                borderLeft: '1px solid var(--border-subtle)',
+                borderRight: '1px solid var(--border-subtle)',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+              title="View Page Overview / Thumbnails"
+            >
+              <LayoutGrid size={13} />
+              <span>
+                {currentPageIndex + 1} / {totalPages}
+              </span>
+            </button>
+
+            {/* Next Page Button */}
+            <button
+              onClick={onNextPage}
+              disabled={currentPageIndex >= totalPages - 1}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '5px 7px',
+                background: 'transparent',
+                border: 'none',
+                color: currentPageIndex >= totalPages - 1 ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+                cursor: currentPageIndex >= totalPages - 1 ? 'not-allowed' : 'pointer',
+              }}
+              title="Next Page"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
 
           {/* Add Page Button */}
           <button

@@ -10,6 +10,7 @@ import { Toolbar } from './Toolbar';
 import { PaperCanvas, type ShapeMode } from './PaperCanvas';
 import { PageDrawer } from './PageDrawer';
 import { FeatherLoader } from '../common/FeatherLoader';
+import { ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react';
 
 interface NoteEditorProps {
   notebook: Notebook;
@@ -756,6 +757,33 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     setTransform((prev) => ({ ...prev, zoom: 1.0 }));
   };
 
+  // Keyboard page navigation (ArrowLeft / ArrowRight / PageUp / PageDown)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        editingTextBoxId ||
+        ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)
+      ) {
+        return;
+      }
+
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        if (currentPageIndex < pages.length - 1) {
+          e.preventDefault();
+          setCurrentPageIndex((prev) => prev + 1);
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        if (currentPageIndex > 0) {
+          e.preventDefault();
+          setCurrentPageIndex((prev) => prev - 1);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [editingTextBoxId, currentPageIndex, pages.length]);
+
   return (
     <div
       ref={containerRef}
@@ -910,6 +938,107 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
         </div>
       )}
 
+      {/* Floating Bottom Page Navigation Controls */}
+      {pages.length > 0 && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '6px 10px',
+            borderRadius: '24px',
+            backgroundColor: 'var(--bg-secondary)',
+            border: '1px solid var(--border-subtle)',
+            boxShadow: '0 6px 20px rgba(0, 0, 0, 0.16)',
+            zIndex: 45,
+            backdropFilter: 'blur(8px)',
+            userSelect: 'none',
+          }}
+        >
+          {/* Previous Page Button */}
+          <button
+            onClick={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}
+            disabled={currentPageIndex <= 0}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '6px 12px',
+              borderRadius: '16px',
+              border: 'none',
+              backgroundColor: currentPageIndex <= 0 ? 'transparent' : 'var(--bg-tertiary)',
+              color: currentPageIndex <= 0 ? 'var(--text-tertiary)' : 'var(--text-primary)',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: currentPageIndex <= 0 ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+            title="Go to Previous Page"
+          >
+            <ChevronLeft size={16} />
+            <span>Prev</span>
+          </button>
+
+          {/* Current Page / Overview Trigger */}
+          <button
+            onClick={() => setIsPageDrawerOpen(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '5px 10px',
+              borderRadius: '12px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              color: 'var(--text-secondary)',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+            title="Open Page Overview"
+          >
+            <LayoutGrid size={13} color="#3f52ff" />
+            <span>
+              Page {currentPageIndex + 1} of {pages.length}
+            </span>
+          </button>
+
+          {/* Next Page Button */}
+          <button
+            onClick={() => {
+              if (currentPageIndex < pages.length - 1) {
+                setCurrentPageIndex((prev) => prev + 1);
+              } else {
+                handleAddPage();
+              }
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '6px 14px',
+              borderRadius: '16px',
+              border: 'none',
+              backgroundColor: '#3f52ff',
+              color: '#ffffff',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(63, 82, 255, 0.3)',
+              transition: 'all 0.15s ease',
+            }}
+            title={currentPageIndex < pages.length - 1 ? 'Go to Next Page' : 'Add and Go to Next Page'}
+          >
+            <span>{currentPageIndex < pages.length - 1 ? 'Next' : 'Next (+ Page)'}</span>
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
+
       {/* Slide-out Page Thumbnails Drawer */}
       <PageDrawer
         isOpen={isPageDrawerOpen}
@@ -920,6 +1049,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
         onAddPage={handleAddPage}
         onDuplicatePage={handleDuplicatePage}
         onDeletePage={handleDeletePage}
+        currentStrokes={strokes}
+        currentTextBoxes={textBoxes}
       />
     </div>
   );
