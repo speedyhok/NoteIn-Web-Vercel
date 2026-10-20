@@ -52,8 +52,6 @@ import {
   Sparkles,
   Maximize2,
   Minimize2,
-  ZoomIn,
-  ZoomOut,
   Palette,
   Trash2,
   Check,
@@ -62,6 +60,8 @@ import {
   ChevronRight,
   Edit2,
   Image as ImageIcon,
+  BookOpen,
+  Eye,
 } from 'lucide-react';
 import { ColorPicker } from './ColorPicker';
 import { StrokeWidthPicker } from './StrokeWidthPicker';
@@ -111,10 +111,10 @@ interface ToolbarProps {
   onUndo: () => void;
   onRedo: () => void;
   // Zoom
-  zoom: number;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  onResetZoom: () => void;
+  zoom?: number;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onResetZoom?: () => void;
   onFitPage: () => void;
   isCoverMode?: boolean;
   // Pages
@@ -129,6 +129,8 @@ interface ToolbarProps {
   isSaving: boolean;
   isDarkMode: boolean;
   onToggleTheme: () => void;
+  isReadOnly?: boolean;
+  onToggleReadOnly?: () => void;
   // Shape & Ruler
   shapeMode?: ShapeMode;
   onChangeShapeMode?: (mode: ShapeMode) => void;
@@ -202,12 +204,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   canRedo,
   onUndo,
   onRedo,
-  zoom,
-  onZoomIn,
-  onZoomOut,
-  onResetZoom,
-  onFitPage,
-  isCoverMode = false,
+  zoom: _zoom,
+  onZoomIn: _onZoomIn,
+  onZoomOut: _onZoomOut,
+  onResetZoom: _onResetZoom,
+  onFitPage: _onFitPage,
+  isCoverMode: _isCoverMode = false,
   currentPageIndex,
   totalPages,
   onPrevPage,
@@ -219,6 +221,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   isSaving,
   isDarkMode,
   onToggleTheme,
+  isReadOnly = false,
+  onToggleReadOnly,
   shapeMode = 'none',
   onChangeShapeMode,
   isRulerActive = false,
@@ -620,87 +624,32 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             )}
           </button>
 
-          {/* Fit Page to Screen Button in Header */}
-          <button
-            id="fit-page-to-screen-btn"
-            onClick={onFitPage}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '5px',
-              padding: '5px 10px',
-              borderRadius: '8px',
-              border: '1px solid var(--border-subtle)',
-              backgroundColor: isCoverMode ? 'rgba(63, 82, 255, 0.12)' : 'var(--bg-tertiary)',
-              color: isCoverMode ? '#3f52ff' : 'var(--text-secondary)',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-            title={isCoverMode ? 'Fit Page Overview' : 'Fit to Screen (Cover)'}
-          >
-            {isCoverMode ? <Minimize2 size={14} color="#3f52ff" /> : <Maximize2 size={14} color="#3f52ff" />}
-            <span className="hide-on-mobile">{isCoverMode ? 'Overview' : 'Fit to Screen'}</span>
-          </button>
-
-          {/* Quick Zoom In/Out & Reset Controls */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              backgroundColor: 'var(--bg-tertiary)',
-              borderRadius: '8px',
-              border: '1px solid var(--border-subtle)',
-            }}
-          >
+          {/* Read Only Mode Toggle (In Top Header where Zoom button was) */}
+          {onToggleReadOnly && (
             <button
-              onClick={onZoomOut}
+              id="read-only-mode-toggle-btn"
+              onClick={onToggleReadOnly}
               style={{
-                padding: '5px 7px',
-                border: 'none',
-                background: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-              }}
-              title="Zoom Out"
-            >
-              <ZoomOut size={13} />
-            </button>
-            <button
-              onClick={onResetZoom}
-              style={{
-                padding: '4px 6px',
-                border: 'none',
-                background: 'none',
-                color: 'var(--text-primary)',
-                fontSize: '11px',
-                fontWeight: 700,
+                gap: '6px',
+                padding: '5px 12px',
+                borderRadius: '8px',
+                border: isReadOnly ? '1.5px solid #3f52ff' : '1px solid var(--border-subtle)',
+                backgroundColor: isReadOnly ? 'rgba(63, 82, 255, 0.15)' : 'var(--bg-tertiary)',
+                color: isReadOnly ? '#3f52ff' : 'var(--text-secondary)',
+                fontSize: '12px',
+                fontWeight: 600,
                 cursor: 'pointer',
-                minWidth: '38px',
-                textAlign: 'center',
+                transition: 'all 0.15s ease',
+                boxShadow: isReadOnly ? '0 0 0 1px rgba(63, 82, 255, 0.25)' : 'none',
               }}
-              title="Reset Zoom to 100%"
+              title={isReadOnly ? 'Read Only Mode Active: Click to show pen bar and edit' : 'Read Only Mode: Hides pen bar for clean reading'}
             >
-              {Math.round(zoom * 100)}%
+              {isReadOnly ? <BookOpen size={14} color="#3f52ff" /> : <Eye size={14} />}
+              <span>{isReadOnly ? 'Reading' : 'Read Only'}</span>
             </button>
-            <button
-              onClick={onZoomIn}
-              style={{
-                padding: '5px 7px',
-                border: 'none',
-                background: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-              }}
-              title="Zoom In"
-            >
-              <ZoomIn size={13} />
-            </button>
-          </div>
+          )}
 
           {/* Paper Template Selector */}
           <button
@@ -847,7 +796,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           MOVABLE & ORIENTABLE NOTEIN ANDROID FLOATING TOOLBAR
           Can be freely dragged anywhere on screen and switched between horizontal/vertical
           ========================================================================= */}
-      {isCollapsed ? (
+      {!isReadOnly && (
+        isCollapsed ? (
         /* Collapsed Floating Tool Badge (NoteIn Android Compact Penbox) */
         <div
           className="glass-panel"
@@ -1902,6 +1852,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
         </div>
       </div>
+        )
       )}
 
       {/* =========================================================================

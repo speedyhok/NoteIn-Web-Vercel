@@ -10,7 +10,7 @@ import { Toolbar } from './Toolbar';
 import { PaperCanvas, type ShapeMode } from './PaperCanvas';
 import { PageDrawer } from './PageDrawer';
 import { FeatherLoader } from '../common/FeatherLoader';
-import { ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react';
+import { ChevronLeft, ChevronRight, LayoutGrid, Plus, Minus, Maximize2, Minimize2 } from 'lucide-react';
 
 interface NoteEditorProps {
   notebook: Notebook;
@@ -118,6 +118,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   }, [currentPageIndex, resetPageBarInactivityTimer]);
 
   // Autosave status
+  const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState(false);
   const saveStrokesTimeoutRef = useRef<number | null>(null);
   const saveTextBoxesTimeoutRef = useRef<number | null>(null);
@@ -1086,6 +1087,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onResetZoom={handleResetZoom}
           onFitPage={() => handleFitPage()}
           isCoverMode={isCoverMode}
+          isReadOnly={isReadOnly}
+          onToggleReadOnly={() => setIsReadOnly((prev) => !prev)}
           currentPageIndex={currentPageIndex}
           totalPages={pages.length}
           onPrevPage={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}
@@ -1160,6 +1163,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           eraseHighlighterOnly={eraseHighlighterOnly}
           onSelectTool={setActiveTool}
           onUpdateTextBoxStyle={handleUpdateTextBoxStyle}
+          isReadOnly={isReadOnly}
         />
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -1283,6 +1287,139 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           </button>
         </div>
       )}
+
+      {/* Floating Bottom-Right Zoom & Fit Controls (Shifted from Top Header with Inactivity Auto-Hide) */}
+      <div
+        id="bottom-right-zoom-controls"
+        onMouseEnter={() => {
+          isHoveringPageBarRef.current = true;
+          setIsPageBarVisible(true);
+          if (hidePageBarTimeoutRef.current) {
+            clearTimeout(hidePageBarTimeoutRef.current);
+          }
+        }}
+        onMouseLeave={() => {
+          isHoveringPageBarRef.current = false;
+          resetPageBarInactivityTimer();
+        }}
+        style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '24px',
+          zIndex: 45,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '2px',
+          padding: '4px 6px',
+          borderRadius: '24px',
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px solid var(--border-subtle)',
+          boxShadow: '0 6px 20px rgba(0, 0, 0, 0.16)',
+          backdropFilter: 'blur(8px)',
+          userSelect: 'none',
+          transform: isPageBarVisible ? 'translateY(0)' : 'translateY(28px)',
+          opacity: isPageBarVisible ? 1 : 0,
+          pointerEvents: isPageBarVisible ? 'auto' : 'none',
+          transition: 'opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
+      >
+        {/* Zoom Out Button */}
+        <button
+          onClick={handleZoomOut}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '28px',
+            height: '28px',
+            borderRadius: '50%',
+            border: 'none',
+            backgroundColor: 'transparent',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+            transition: 'background-color 0.15s ease',
+          }}
+          title="Zoom Out (-)"
+        >
+          <Minus size={14} />
+        </button>
+
+        {/* Zoom Percentage / Reset to 100% */}
+        <button
+          onClick={handleResetZoom}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '2px 6px',
+            borderRadius: '12px',
+            border: 'none',
+            backgroundColor: 'var(--bg-tertiary)',
+            color: 'var(--text-primary)',
+            fontSize: '11px',
+            fontWeight: 700,
+            cursor: 'pointer',
+            minWidth: '44px',
+          }}
+          title="Click to Reset Zoom to 100%"
+        >
+          {Math.round(transform.zoom * 100)}%
+        </button>
+
+        {/* Zoom In Button */}
+        <button
+          onClick={handleZoomIn}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '28px',
+            height: '28px',
+            borderRadius: '50%',
+            border: 'none',
+            backgroundColor: 'transparent',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+            transition: 'background-color 0.15s ease',
+          }}
+          title="Zoom In (+)"
+        >
+          <Plus size={14} />
+        </button>
+
+        {/* Divider */}
+        <div
+          style={{
+            width: '1px',
+            height: '16px',
+            backgroundColor: 'var(--border-subtle)',
+            margin: '0 4px',
+          }}
+        />
+
+        {/* Fit to Screen / Overview Toggle */}
+        <button
+          onClick={() => handleFitPage()}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '4px 10px',
+            borderRadius: '16px',
+            border: 'none',
+            backgroundColor: isCoverMode ? 'rgba(63, 82, 255, 0.12)' : 'var(--bg-tertiary)',
+            color: isCoverMode ? '#3f52ff' : 'var(--text-secondary)',
+            fontSize: '11px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+          title={isCoverMode ? 'Fit Page Overview' : 'Fit to Screen (Cover)'}
+        >
+          {isCoverMode ? <Minimize2 size={13} color="#3f52ff" /> : <Maximize2 size={13} color="#3f52ff" />}
+          <span>{isCoverMode ? 'Overview' : 'Fit'}</span>
+        </button>
+      </div>
 
       {/* Slide-out Page Thumbnails Drawer */}
       <PageDrawer

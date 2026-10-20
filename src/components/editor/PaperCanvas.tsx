@@ -54,6 +54,7 @@ interface PaperCanvasProps {
   shapeMode?: ShapeMode;
   isRulerActive?: boolean;
   onCloseRuler?: () => void;
+  isReadOnly?: boolean;
 }
 
 // Geometric vector shape point generator
@@ -342,6 +343,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   shapeMode = 'none',
   isRulerActive = false,
   onCloseRuler,
+  isReadOnly = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const paperCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -609,6 +611,13 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   // Pointer Down Event
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
+
+    if (isReadOnly) {
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+      setIsPanning(true);
+      lastPanPointRef.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
 
     const container = containerRef.current;
     if (!container) return;
@@ -950,6 +959,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   }
 
   const getCursor = () => {
+    if (isReadOnly) return isPanning ? 'grabbing' : 'grab';
     if (activeTool === 'lasso') return isDraggingSelection ? 'grabbing' : 'crosshair';
     if (activeTool === 'pan') return isPanning ? 'grabbing' : 'grab';
     if (activeTool === 'eraser') return 'crosshair';
@@ -1004,8 +1014,8 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
         {images && images.length > 0 && (
           <ImageOverlay
             images={images}
-            selectedImageId={selectedImageId || null}
-            onSelectImage={onSelectImage || (() => {})}
+            selectedImageId={isReadOnly ? null : (selectedImageId || null)}
+            onSelectImage={isReadOnly ? () => {} : (onSelectImage || (() => {}))}
             onUpdatePosition={onUpdateImagePosition || (() => {})}
             onCommitPosition={onCommitImagePosition || (() => {})}
             onUpdateSize={onUpdateImageSize || (() => {})}
@@ -1013,7 +1023,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
             onDeleteImage={onDeleteImage || (() => {})}
             onDuplicateImage={onDuplicateImage}
             zoom={transform.zoom}
-            activeTool={activeTool}
+            activeTool={isReadOnly ? 'pen' : activeTool}
           />
         )}
 
@@ -1062,7 +1072,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
         />
 
         {/* Layer 5: Lasso Selection Bounding Box & Floating Action Menu */}
-        {selectionBounds && selectedStrokes.length > 0 && (
+        {!isReadOnly && selectionBounds && selectedStrokes.length > 0 && (
           <div
             onPointerDown={handleSelectionPointerDown}
             onPointerMove={handleSelectionPointerMove}
