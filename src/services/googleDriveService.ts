@@ -860,3 +860,82 @@ export async function listDriveFiles(searchTerm?: string): Promise<GooglePickedF
     url: f.webViewLink,
   }));
 }
+
+
+export interface GoogleDriveFolderContent {
+  folders: GooglePickedFile[];
+  files: GooglePickedFile[];
+}
+
+export async function listDriveFolder(
+  folderId: string = 'root',
+  searchTerm?: string
+): Promise<GoogleDriveFolderContent> {
+  let token: string;
+  try {
+    token = await requestDriveAccessToken();
+  } catch (err: any) {
+    throw new Error(`Google Drive authorization required: ${err?.message || err}`);
+  }
+
+  const queryParts = ['trashed = false'];
+
+  if (searchTerm && searchTerm.trim()) {
+    // When searching, query across Drive
+    const escaped = searchTerm.trim().replace(/['"\\]/g, '');
+    queryParts.push(`name contains '${escaped}'`);
+  } else {
+    // When browsing, list items inside the current folder
+    queryParts.push(`'${folderId}' in parents`);
+  }
+
+  const q = queryParts.join(' and ');
+  const url = `https://www.googleapis.com/drive/v3/files?pageSize=100&fields=files(id,name,mimeType,size,modifiedTime,iconLink,webViewLink,parents)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name asc&q=${encodeURIComponent(q)}`;
+
+  let res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (res.status === 401) {
+    token = await requestDriveAccessToken(true);
+    res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    const rawMsg = errData?.error?.message || `Failed to fetch items from Google Drive (${res.status})`;
+    if (res.status === 403 && (rawMsg.includes('has not been used') || rawMsg.includes('disabled') || rawMsg.includes('Enable it') || rawMsg.includes('Drive API'))) {
+      throw new Error(
+        'Google Drive API is not enabled in your Google Cloud Project. Please enable it at: https://console.cloud.google.com/apis/library/drive.googleapis.com'
+      );
+    }
+    throw new Error(rawMsg);
+  }
+
+  const data = await res.json();
+  const rawItems: any[] = data.files || [];
+
+  const folders: GooglePickedFile[] = [];
+  const files: GooglePickedFile[] = [];
+
+  for (const f of rawItems) {
+    const item: GooglePickedFile = {
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      sizeBytes: f.size ? Number(f.size) : undefined,
+      lastEditedUtc: f.modifiedTime ? new Date(f.modifiedTime).getTime() : undefined,
+      iconUrl: f.iconLink,
+      url: f.webViewLink,
+    };
+    if (f.mimeType === 'application/vnd.google-apps.folder') {
+      folders.push(item);
+    } else {
+      files.push(item);
+    }
+  }
+
+  return { folders, files };
+}

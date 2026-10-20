@@ -1,6 +1,5 @@
 // NoteIn Web - Google Drive Cloud Sync & Browser Modal
-// Professional consumer-facing Google Drive integration:
-// Sign in with Google -> Browse & Open files directly from Drive -> Back up notebooks to Drive
+// Displays Google Drive hierarchically with real folders, breadcrumbs, search, and 1-click import
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { GoogleUser, Notebook, Stroke, TextBox } from '../../types';
@@ -10,13 +9,12 @@ import {
   initializeGoogleIdentity,
   renderGoogleSignInButton,
   downloadDriveFile,
-  listDriveFiles,
   getGoogleClientId,
   uploadNotebookToGoogleDrive,
   signInAndAuthorizeDrive,
   requestDriveAccessToken,
   hasValidAccessToken,
-  openGoogleDrivePicker,
+  listDriveFolder,
   type GooglePickedFile,
 } from '../../services/googleDriveService';
 import { importAnyDocument } from '../../services/documentImporter';
@@ -25,6 +23,7 @@ import {
   X,
   HardDrive,
   LogOut,
+  Folder,
   FolderOpen,
   Loader2,
   CheckCircle2,
@@ -36,12 +35,20 @@ import {
   Image as ImageIcon,
   File as FileGeneric,
   CloudUpload,
+  ChevronRight,
+  ArrowLeft,
+  Home,
 } from 'lucide-react';
 
 interface GoogleDriveModalProps {
   isOpen: boolean;
   onClose: () => void;
   onImportComplete: (notebook: Notebook) => void;
+}
+
+interface BreadcrumbItem {
+  id: string;
+  name: string;
 }
 
 function formatBytes(bytes?: number): string {
@@ -82,11 +89,17 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
   const [currentUser, setCurrentUser] = useState<GoogleUser | null>(() => getGoogleUser());
   const [clientId] = useState(() => getGoogleClientId());
 
-  // Drive files & search
-  const [driveFiles, setDriveFiles] = useState<GooglePickedFile[]>([]);
-  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  // Navigation: Breadcrumbs & Folders
+  const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([
+    { id: 'root', name: 'My Drive' },
+  ]);
+  const currentFolder = breadcrumbs[breadcrumbs.length - 1];
+
+  // Drive contents
+  const [folders, setFolders] = useState<GooglePickedFile[]>([]);
+  const [files, setFiles] = useState<GooglePickedFile[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
-  const [isPickerOpening, setIsPickerOpening] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Importing & backup states
@@ -99,18 +112,19 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
 
   const googleBtnContainerRef = useRef<HTMLDivElement>(null);
 
-  // Load files from Google Drive
-  const loadFiles = useCallback(async (query?: string) => {
-    setIsLoadingFiles(true);
+  // Load contents of current folder or search query
+  const loadFolderContents = useCallback(async (folderId: string = 'root', query?: string) => {
+    setIsLoading(true);
     setErrorMessage(null);
     try {
-      const files = await listDriveFiles(query);
-      setDriveFiles(files);
+      const content = await listDriveFolder(folderId, query);
+      setFolders(content.folders);
+      setFiles(content.files);
     } catch (err: any) {
-      console.warn('Load drive files error:', err);
-      setErrorMessage(err?.message || 'Could not list files from Google Drive.');
+      console.warn('Load folder error:', err);
+      setErrorMessage(err?.message || 'Could not list Google Drive files.');
     } finally {
-      setIsLoadingFiles(false);
+      setIsLoading(false);
     }
   }, []);
 
@@ -129,7 +143,9 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
           setCurrentUser(user);
           setSuccessMessage(`Signed in as ${user.name}`);
           setErrorMessage(null);
-          await loadFiles();
+          if (hasValidAccessToken()) {
+            await loadFolderContents('root');
+          }
         },
         (error) => {
           console.warn('GIS error:', error);
@@ -141,9 +157,9 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     }
 
     if (activeUser && hasValidAccessToken()) {
-      loadFiles();
+      loadFolderContents(currentFolder.id);
     }
-  }, [isOpen, clientId, loadFiles]);
+  }, [isOpen, clientId, loadFolderContents]);
 
   // Render Google Sign-In button if user not logged in
   useEffect(() => {
@@ -167,6 +183,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Sign In & Connect
   const handleSignInAndConnect = async () => {
     setIsSigningIn(true);
     setErrorMessage(null);
@@ -175,7 +192,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       const { user } = await signInAndAuthorizeDrive();
       setCurrentUser(user);
       setSuccessMessage(`Signed in as ${user.name}`);
-      await loadFiles();
+      await loadFolderContents('root');
     } catch (err: any) {
       console.warn('Sign in & connect error:', err);
       setErrorMessage(err?.message || 'Failed to sign in and connect Google Drive.');
@@ -184,47 +201,52 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     }
   };
 
+  // Authorize Drive
   const handleAuthorizeDrive = async () => {
-    setIsLoadingFiles(true);
+    setIsLoading(true);
     setErrorMessage(null);
     try {
       await requestDriveAccessToken(true);
-      await loadFiles();
+      await loadFolderContents(currentFolder.id);
       setSuccessMessage('Google Drive permissions granted!');
     } catch (err: any) {
       setErrorMessage(err?.message || 'Failed to authorize Google Drive.');
     } finally {
-      setIsLoadingFiles(false);
+      setIsLoading(false);
     }
   };
 
-  const handleOpenGooglePicker = async () => {
-    setIsPickerOpening(true);
-    setErrorMessage(null);
-    try {
-      await openGoogleDrivePicker({
-        onPicked: async (files) => {
-          if (files.length > 0) {
-            await handleImportFile(files[0]);
-          }
-        },
-        onError: (err) => {
-          console.warn('Picker error:', err);
-          setErrorMessage(err?.message || 'Google Picker could not open.');
-        },
-      });
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Failed to open Google Drive picker.');
-    } finally {
-      setIsPickerOpening(false);
-    }
+  // Navigate into a folder
+  const handleOpenFolder = (folder: GooglePickedFile) => {
+    setSearchQuery('');
+    setBreadcrumbs((prev) => [...prev, { id: folder.id, name: folder.name }]);
+    loadFolderContents(folder.id);
+  };
+
+  // Jump to specific breadcrumb
+  const handleJumpToBreadcrumb = (index: number) => {
+    setSearchQuery('');
+    const target = breadcrumbs[index];
+    setBreadcrumbs(breadcrumbs.slice(0, index + 1));
+    loadFolderContents(target.id);
+  };
+
+  // Navigate up one folder
+  const handleGoBack = () => {
+    if (breadcrumbs.length <= 1) return;
+    setSearchQuery('');
+    const newCrumbs = breadcrumbs.slice(0, breadcrumbs.length - 1);
+    setBreadcrumbs(newCrumbs);
+    loadFolderContents(newCrumbs[newCrumbs.length - 1].id);
   };
 
   const handleSignOut = async () => {
     try {
       await signOutFromGoogle();
       setCurrentUser(null);
-      setDriveFiles([]);
+      setFolders([]);
+      setFiles([]);
+      setBreadcrumbs([{ id: 'root', name: 'My Drive' }]);
       setSuccessMessage('Signed out of Google account.');
       setErrorMessage(null);
     } catch (err: any) {
@@ -297,18 +319,13 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       }
 
       setSuccessMessage(`✓ Successfully backed up ${count} notebook(s) to your Google Drive!`);
-      loadFiles();
+      loadFolderContents(currentFolder.id);
     } catch (err: any) {
       setErrorMessage(`Backup to Google Drive failed: ${err?.message || err}`);
     } finally {
       setIsBackingUp(false);
     }
   };
-
-  const filteredFiles = driveFiles.filter((f) => {
-    if (!searchQuery.trim()) return true;
-    return f.name.toLowerCase().includes(searchQuery.toLowerCase().trim());
-  });
 
   return (
     <div
@@ -332,7 +349,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       <div
         style={{
           width: '100%',
-          maxWidth: '560px',
+          maxWidth: '680px',
           maxHeight: '90vh',
           backgroundColor: 'var(--bg-secondary)',
           border: '1px solid var(--border-subtle)',
@@ -374,7 +391,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                 Google Drive
               </h2>
               <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                Open notes, PDFs, & backup your notebooks
+                Browse folders, open documents, & backup notebooks
               </span>
             </div>
           </div>
@@ -527,7 +544,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                   Connect with Google Drive
                 </h3>
                 <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, maxWidth: '400px', lineHeight: 1.5 }}>
-                  Sign in with your Google account to access your notes, PDFs, and documents directly in NoteIn Web.
+                  Sign in with your Google account to access your notes, PDFs, and folders directly in NoteIn Web.
                 </p>
               </div>
 
@@ -566,11 +583,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                 <span>{isSigningIn ? 'Connecting to Google...' : 'Continue with Google'}</span>
               </button>
 
-              {/* Fallback container for official GIS script button if rendered */}
-              <div
-                ref={googleBtnContainerRef}
-                style={{ display: 'none' }}
-              />
+              <div ref={googleBtnContainerRef} style={{ display: 'none' }} />
             </div>
           ) : (
             /* STATE 2: LOGGED IN */
@@ -578,7 +591,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
               {/* User Profile Bar */}
               <div
                 style={{
-                  padding: '14px 18px',
+                  padding: '12px 16px',
                   borderRadius: '12px',
                   backgroundColor: 'var(--bg-primary)',
                   border: '1px solid var(--border-subtle)',
@@ -589,25 +602,25 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                   flexWrap: 'wrap',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   {currentUser.picture ? (
                     <img
                       src={currentUser.picture}
                       alt={currentUser.name}
-                      style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }}
+                      style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover' }}
                     />
                   ) : (
                     <div
                       style={{
-                        width: '40px',
-                        height: '40px',
+                        width: '36px',
+                        height: '36px',
                         borderRadius: '50%',
                         backgroundColor: '#3f52ff',
                         color: '#ffffff',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        fontSize: '16px',
+                        fontSize: '15px',
                         fontWeight: 700,
                       }}
                     >
@@ -617,14 +630,14 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
 
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
                         {currentUser.name}
                       </span>
                       <span
                         style={{
                           fontSize: '10px',
                           fontWeight: 700,
-                          padding: '2px 8px',
+                          padding: '1px 7px',
                           borderRadius: '9999px',
                           backgroundColor: 'rgba(22, 163, 74, 0.12)',
                           color: '#16a34a',
@@ -633,7 +646,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                         Connected
                       </span>
                     </div>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{currentUser.email}</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{currentUser.email}</span>
                   </div>
                 </div>
 
@@ -645,7 +658,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
-                      padding: '7px 14px',
+                      padding: '6px 12px',
                       borderRadius: '8px',
                       border: '1px solid var(--border-subtle)',
                       backgroundColor: 'var(--bg-secondary)',
@@ -666,7 +679,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                       display: 'flex',
                       alignItems: 'center',
                       gap: '5px',
-                      padding: '7px 12px',
+                      padding: '6px 10px',
                       borderRadius: '8px',
                       border: '1px solid var(--border-subtle)',
                       backgroundColor: 'transparent',
@@ -683,7 +696,56 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                 </div>
               </div>
 
-              {/* Google Drive File Browser */}
+              {/* Authorize Prompt if Token Expired */}
+              {!hasValidAccessToken() && (
+                <div
+                  style={{
+                    padding: '16px 20px',
+                    borderRadius: '12px',
+                    backgroundColor: 'rgba(63, 82, 255, 0.05)',
+                    border: '1px solid rgba(63, 82, 255, 0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <FolderOpen size={22} color="#3f52ff" />
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        Grant Drive Access
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        Authorize NoteIn to view and navigate your folders & files:
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleAuthorizeDrive}
+                    disabled={isLoading}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '7px 16px',
+                      borderRadius: '8px',
+                      backgroundColor: '#3f52ff',
+                      color: '#ffffff',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {isLoading ? <Loader2 size={13} className="animate-spin" /> : <HardDrive size={13} />}
+                    <span>Authorize & Load Folders</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Google Drive Folder & File Browser */}
               <div
                 style={{
                   padding: '16px 18px',
@@ -695,249 +757,346 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
                   gap: '12px',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
-                  <h3 style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <FolderOpen size={16} color="#3f52ff" />
-                    <span>Files in Google Drive</span>
-                  </h3>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <button
-                      onClick={handleOpenGooglePicker}
-                      disabled={isPickerOpening}
+                {/* Search Bar & Refresh */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ position: 'relative', flex: 1 }}>
+                    <Search
+                      size={14}
+                      color="var(--text-muted)"
+                      style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)' }}
+                    />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        loadFolderContents(currentFolder.id, e.target.value);
+                      }}
+                      placeholder="Search across all files and folders..."
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '5px 10px',
-                        borderRadius: '6px',
+                        width: '100%',
+                        padding: '7px 12px 7px 32px',
+                        borderRadius: '8px',
                         border: '1px solid var(--border-subtle)',
                         backgroundColor: 'var(--bg-secondary)',
                         color: 'var(--text-primary)',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        cursor: isPickerOpening ? 'not-allowed' : 'pointer',
+                        fontSize: '12px',
+                        outline: 'none',
                       }}
-                      title="Open Google Drive native picker window"
-                    >
-                      {isPickerOpening ? <Loader2 size={12} className="animate-spin" /> : <FolderOpen size={12} color="#3f52ff" />}
-                      <span>Google Picker</span>
-                    </button>
-
-                    <button
-                      onClick={() => loadFiles(searchQuery)}
-                      disabled={isLoadingFiles}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '5px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--border-subtle)',
-                        backgroundColor: 'var(--bg-secondary)',
-                        color: 'var(--text-secondary)',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        cursor: isLoadingFiles ? 'not-allowed' : 'pointer',
-                      }}
-                      title="Reload files from Google Drive"
-                    >
-                      <RefreshCw size={12} className={isLoadingFiles ? 'animate-spin' : ''} />
-                      <span>Refresh</span>
-                    </button>
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => {
+                          setSearchQuery('');
+                          loadFolderContents(currentFolder.id);
+                        }}
+                        style={{
+                          position: 'absolute',
+                          right: '8px',
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-muted)',
+                          cursor: 'pointer',
+                          padding: '2px',
+                        }}
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
                   </div>
-                </div>
 
-                {/* Search Bar */}
-                <div style={{ position: 'relative' }}>
-                  <Search
-                    size={14}
-                    color="var(--text-muted)"
-                    style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)' }}
-                  />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      loadFiles(e.target.value);
-                    }}
-                    placeholder="Search files by name..."
+                  <button
+                    onClick={() => loadFolderContents(currentFolder.id, searchQuery)}
+                    disabled={isLoading}
                     style={{
-                      width: '100%',
-                      padding: '7px 12px 7px 32px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '7px 12px',
                       borderRadius: '8px',
                       border: '1px solid var(--border-subtle)',
                       backgroundColor: 'var(--bg-secondary)',
-                      color: 'var(--text-primary)',
+                      color: 'var(--text-secondary)',
                       fontSize: '12px',
-                      outline: 'none',
+                      fontWeight: 600,
+                      cursor: isLoading ? 'not-allowed' : 'pointer',
                     }}
-                  />
+                    title="Reload current folder"
+                  >
+                    <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+                    <span>Refresh</span>
+                  </button>
                 </div>
 
-                {/* File List */}
-                <div
-                  style={{
-                    maxHeight: '320px',
-                    overflowY: 'auto',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px',
-                    marginTop: '4px',
-                  }}
-                >
-                  {isLoadingFiles ? (
-                    <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                      <Loader2 size={24} className="animate-spin" color="#3f52ff" style={{ margin: '0 auto 8px auto' }} />
-                      <span>Loading your Google Drive files...</span>
-                    </div>
-                  ) : filteredFiles.length === 0 ? (
-                    <div style={{ padding: '32px 20px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
-                      <HardDrive size={32} color="var(--text-muted)" style={{ opacity: 0.5 }} />
-                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                        {searchQuery ? `No matching files found for "${searchQuery}"` : 'No files found in your Google Drive'}
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', maxWidth: '380px', lineHeight: 1.5 }}>
-                        {searchQuery
-                          ? 'Try searching with a different filename.'
-                          : 'If you have existing files in Google Drive, grant Drive permissions below to show all your PDFs and documents, or browse using Google Picker:'}
-                      </div>
-                      {!searchQuery && (
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '6px' }}>
-                          <button
-                            onClick={handleAuthorizeDrive}
-                            disabled={isLoadingFiles}
-                            style={{
-                              padding: '7px 14px',
-                              borderRadius: '8px',
-                              backgroundColor: '#3f52ff',
-                              color: '#ffffff',
-                              border: 'none',
-                              fontSize: '12px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                            }}
-                          >
-                            <RefreshCw size={12} className={isLoadingFiles ? 'animate-spin' : ''} />
-                            <span>Authorize & Load Files</span>
-                          </button>
-
-                          <button
-                            onClick={handleOpenGooglePicker}
-                            disabled={isPickerOpening}
-                            style={{
-                              padding: '7px 14px',
-                              borderRadius: '8px',
-                              backgroundColor: 'var(--bg-secondary)',
-                              color: 'var(--text-primary)',
-                              border: '1px solid var(--border-subtle)',
-                              fontSize: '12px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                            }}
-                          >
-                            <FolderOpen size={12} color="#3f52ff" />
-                            <span>Open with Google Picker</span>
-                          </button>
-
-                          <button
-                            onClick={handleBackupAllNotebooks}
-                            disabled={isBackingUp}
-                            style={{
-                              padding: '7px 14px',
-                              borderRadius: '8px',
-                              backgroundColor: 'var(--bg-secondary)',
-                              color: 'var(--text-primary)',
-                              border: '1px solid var(--border-subtle)',
-                              fontSize: '12px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                            }}
-                          >
-                            <CloudUpload size={12} color="#16a34a" />
-                            <span>Backup Notebooks</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    filteredFiles.map((file) => (
-                      <div
-                        key={file.id}
+                {/* Breadcrumbs Navigation Bar (Google Drive Style) */}
+                {!searchQuery && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '6px 8px',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-subtle)',
+                      overflowX: 'auto',
+                      fontSize: '12px',
+                    }}
+                  >
+                    {breadcrumbs.length > 1 && (
+                      <button
+                        onClick={handleGoBack}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '10px 14px',
-                          borderRadius: '8px',
-                          backgroundColor: 'var(--bg-secondary)',
+                          gap: '4px',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          backgroundColor: 'var(--bg-primary)',
                           border: '1px solid var(--border-subtle)',
-                          transition: 'background-color 0.15s ease',
-                          gap: '12px',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          marginRight: '4px',
                         }}
+                        title="Back to parent folder"
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                          {getFileIcon(file.name, file.mimeType)}
-                          <div style={{ minWidth: 0 }}>
-                            <div
-                              style={{
-                                fontSize: '13px',
-                                fontWeight: 600,
-                                color: 'var(--text-primary)',
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                              }}
-                              title={file.name}
-                            >
-                              {file.name}
-                            </div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
-                              {file.sizeBytes ? <span>{formatBytes(file.sizeBytes)}</span> : null}
-                              {file.lastEditedUtc ? <span>{formatDate(file.lastEditedUtc)}</span> : null}
-                            </div>
+                        <ArrowLeft size={12} />
+                        <span>Back</span>
+                      </button>
+                    )}
+
+                    {breadcrumbs.map((crumb, idx) => {
+                      const isLast = idx === breadcrumbs.length - 1;
+                      return (
+                        <React.Fragment key={crumb.id}>
+                          {idx > 0 && <ChevronRight size={13} color="var(--text-muted)" style={{ flexShrink: 0 }} />}
+                          <button
+                            onClick={() => handleJumpToBreadcrumb(idx)}
+                            disabled={isLast}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              background: 'transparent',
+                              border: 'none',
+                              color: isLast ? 'var(--text-primary)' : '#3f52ff',
+                              fontWeight: isLast ? 700 : 500,
+                              cursor: isLast ? 'default' : 'pointer',
+                              padding: '3px 6px',
+                              borderRadius: '4px',
+                              whiteSpace: 'nowrap',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {idx === 0 ? <Home size={13} /> : <Folder size={13} />}
+                            <span>{crumb.name}</span>
+                          </button>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Directory Contents Container */}
+                <div
+                  style={{
+                    maxHeight: '360px',
+                    overflowY: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '14px',
+                  }}
+                >
+                  {isLoading ? (
+                    <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+                      <Loader2 size={24} className="animate-spin" color="#3f52ff" style={{ margin: '0 auto 8px auto' }} />
+                      <span>Loading Drive contents...</span>
+                    </div>
+                  ) : folders.length === 0 && files.length === 0 ? (
+                    <div style={{ padding: '36px 20px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                      <FolderOpen size={36} color="var(--text-muted)" style={{ opacity: 0.5 }} />
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {searchQuery ? `No matches found for "${searchQuery}"` : 'This folder is empty'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', maxWidth: '340px', lineHeight: 1.5 }}>
+                        {searchQuery
+                          ? 'Try searching with another keyword.'
+                          : 'No files or subfolders found in this directory.'}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {/* SECTION 1: FOLDERS */}
+                      {folders.length > 0 && (
+                        <div>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              color: 'var(--text-muted)',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.5px',
+                              marginBottom: '8px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <Folder size={12} color="#3f52ff" />
+                            <span>Folders ({folders.length})</span>
+                          </div>
+
+                          <div
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                              gap: '8px',
+                            }}
+                          >
+                            {folders.map((folder) => (
+                              <div
+                                key={folder.id}
+                                onClick={() => handleOpenFolder(folder)}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  padding: '10px 12px',
+                                  borderRadius: '8px',
+                                  backgroundColor: 'var(--bg-secondary)',
+                                  border: '1px solid var(--border-subtle)',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                  gap: '8px',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.borderColor = '#3f52ff';
+                                  e.currentTarget.style.backgroundColor = 'rgba(63, 82, 255, 0.05)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                                  e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                                }}
+                                title={`Open folder: ${folder.name}`}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                                  <Folder size={18} color="#3f52ff" style={{ flexShrink: 0 }} />
+                                  <span
+                                    style={{
+                                      fontSize: '12px',
+                                      fontWeight: 600,
+                                      color: 'var(--text-primary)',
+                                      whiteSpace: 'nowrap',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                    }}
+                                  >
+                                    {folder.name}
+                                  </span>
+                                </div>
+                                <ChevronRight size={14} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                              </div>
+                            ))}
                           </div>
                         </div>
+                      )}
 
-                        <button
-                          onClick={() => handleImportFile(file)}
-                          disabled={!!importingFileName}
-                          style={{
-                            flexShrink: 0,
-                            padding: '6px 14px',
-                            borderRadius: '6px',
-                            backgroundColor: '#3f52ff',
-                            color: '#ffffff',
-                            border: 'none',
-                            fontSize: '12px',
-                            fontWeight: 600,
-                            cursor: importingFileName ? 'not-allowed' : 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                          }}
-                        >
-                          Open
-                        </button>
-                      </div>
-                    ))
+                      {/* SECTION 2: FILES */}
+                      {files.length > 0 && (
+                        <div>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              color: 'var(--text-muted)',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.5px',
+                              marginBottom: '8px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <FileGeneric size={12} color="#16a34a" />
+                            <span>Files ({files.length})</span>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {files.map((file) => (
+                              <div
+                                key={file.id}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  padding: '10px 14px',
+                                  borderRadius: '8px',
+                                  backgroundColor: 'var(--bg-secondary)',
+                                  border: '1px solid var(--border-subtle)',
+                                  transition: 'background-color 0.15s ease',
+                                  gap: '12px',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                                  {getFileIcon(file.name, file.mimeType)}
+                                  <div style={{ minWidth: 0 }}>
+                                    <div
+                                      style={{
+                                        fontSize: '13px',
+                                        fontWeight: 600,
+                                        color: 'var(--text-primary)',
+                                        whiteSpace: 'nowrap',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                      }}
+                                      title={file.name}
+                                    >
+                                      {file.name}
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
+                                      {file.sizeBytes ? <span>{formatBytes(file.sizeBytes)}</span> : null}
+                                      {file.lastEditedUtc ? <span>{formatDate(file.lastEditedUtc)}</span> : null}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <button
+                                  onClick={() => handleImportFile(file)}
+                                  disabled={!!importingFileName}
+                                  style={{
+                                    flexShrink: 0,
+                                    padding: '6px 14px',
+                                    borderRadius: '6px',
+                                    backgroundColor: '#3f52ff',
+                                    color: '#ffffff',
+                                    border: 'none',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    cursor: importingFileName ? 'not-allowed' : 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                  }}
+                                >
+                                  Open
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
 
-              {/* Recent Imports list */}
+              {/* Recent Imports */}
               {recentImports.length > 0 && (
-                <div style={{ marginTop: '4px' }}>
+                <div style={{ marginTop: '2px' }}>
                   <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
                     Recently Opened
                   </span>
