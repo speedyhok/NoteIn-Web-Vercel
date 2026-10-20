@@ -39,6 +39,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
   const [images, setImages] = useState<NoteImage[]>([]);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [activeTool, setActiveTool] = useState<ToolType>('pen');
   const [currentColor, setCurrentColor] = useState<string>('#1d4ed8');
   const [currentWidth, setCurrentWidth] = useState<number>(3);
@@ -146,6 +147,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     historyRef.current.clear();
     setSelectedTextBoxId(null);
     setEditingTextBoxId(null);
+    setSelectedImageId(null);
 
     Promise.all([
       db.getStrokesForPage(currentPage.id),
@@ -260,6 +262,113 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     historyRef.current.push({ type: 'DELETE_STROKES', strokes: deletedStrokes });
     triggerAutosaveStrokes(currentPage.id, updated);
   };
+
+  // Stroke Batch Commit Handler (for Lasso and Moving Strokes / Shapes)
+  const handleCommitStrokesUpdate = useCallback(
+    (updatedStrokes: Stroke[], prevStrokes?: Stroke[]) => {
+      if (!currentPage || updatedStrokes.length === 0) return;
+      setStrokes((prev) => {
+        const updatedMap = new Map(updatedStrokes.map((s) => [s.id, s]));
+        const nextList = prev.map((s) => updatedMap.get(s.id) || s);
+        if (prevStrokes && prevStrokes.length > 0) {
+          historyRef.current.push({
+            type: 'UPDATE_STROKES',
+            prev: prevStrokes,
+            current: updatedStrokes,
+          });
+        }
+        triggerAutosaveStrokes(currentPage.id, nextList);
+        return nextList;
+      });
+    },
+    [currentPage, triggerAutosaveStrokes]
+  );
+
+  // Note Image Operations (Move, Resize, Duplicate, Delete)
+  const handleUpdateImagePosition = (id: string, newX: number, newY: number) => {
+    setImages((prev) =>
+      prev.map((img) => (img.id === id ? { ...img, x: newX, y: newY } : img))
+    );
+  };
+
+  const handleCommitImagePosition = (
+    id: string,
+    _oldX: number,
+    _oldY: number,
+    newX: number,
+    newY: number
+  ) => {
+    if (!currentPage) return;
+    setImages((prev) => {
+      const updated = prev.map((img) => (img.id === id ? { ...img, x: newX, y: newY } : img));
+      db.saveImagesForPage(currentPage.id, updated).catch((err) =>
+        console.error('Failed to persist image position:', err)
+      );
+      return updated;
+    });
+  };
+
+  const handleUpdateImageSize = (id: string, newW: number, newH: number) => {
+    setImages((prev) =>
+      prev.map((img) => (img.id === id ? { ...img, width: newW, height: newH } : img))
+    );
+  };
+
+  const handleCommitImageSize = (
+    id: string,
+    _oldW: number,
+    _oldH: number,
+    newW: number,
+    newH: number
+  ) => {
+    if (!currentPage) return;
+    setImages((prev) => {
+      const updated = prev.map((img) =>
+        img.id === id ? { ...img, width: newW, height: newH } : img
+      );
+      db.saveImagesForPage(currentPage.id, updated).catch((err) =>
+        console.error('Failed to persist image size:', err)
+      );
+      return updated;
+    });
+  };
+
+  const handleDeleteImage = useCallback(
+    (id: string) => {
+      if (!currentPage) return;
+      setImages((prev) => {
+        const updated = prev.filter((img) => img.id !== id);
+        db.deleteNoteImage(id).catch((err) =>
+          console.error('Failed to delete image:', err)
+        );
+        return updated;
+      });
+      setSelectedImageId((prev) => (prev === id ? null : prev));
+    },
+    [currentPage]
+  );
+
+  const handleDuplicateImage = useCallback(
+    (id: string) => {
+      if (!currentPage) return;
+      const target = images.find((img) => img.id === id);
+      if (!target) return;
+      const cloned: NoteImage = {
+        ...target,
+        id: crypto.randomUUID(),
+        x: target.x + 20,
+        y: target.y + 20,
+        createdAt: Date.now(),
+      };
+      db.addNoteImage(cloned)
+        .then(() => {
+          setImages((prev) => [...prev, cloned]);
+          setSelectedImageId(cloned.id);
+        })
+        .catch((err) => console.error('Failed to duplicate image:', err));
+    },
+    [currentPage, images]
+  );
 
   // 6. Text Box Operations
   const handleCreateTextBox = (x: number, y: number) => {
@@ -972,6 +1081,15 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onAddStroke={handleAddStroke}
           onStrokesLiveUpdate={handleStrokesLiveUpdate}
           onDeleteStrokesCommit={handleDeleteStrokesCommit}
+          onCommitStrokesUpdate={handleCommitStrokesUpdate}
+          selectedImageId={selectedImageId}
+          onSelectImage={setSelectedImageId}
+          onUpdateImagePosition={handleUpdateImagePosition}
+          onCommitImagePosition={handleCommitImagePosition}
+          onUpdateImageSize={handleUpdateImageSize}
+          onCommitImageSize={handleCommitImageSize}
+          onDeleteImage={handleDeleteImage}
+          onDuplicateImage={handleDuplicateImage}
           onCreateTextBox={handleCreateTextBox}
           selectedTextBoxId={selectedTextBoxId}
           editingTextBoxId={editingTextBoxId}

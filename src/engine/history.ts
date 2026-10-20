@@ -99,6 +99,11 @@ export class HistoryManager {
         newTextBoxes = newTextBoxes.map((t) => (t.id === action.current.id ? action.prev : t));
         break;
       }
+      case 'UPDATE_STROKES': {
+        const prevMap = new Map(action.prev.map((s) => [s.id, s]));
+        newStrokes = newStrokes.map((s) => prevMap.get(s.id) || s);
+        break;
+      }
       default:
         break;
     }
@@ -149,6 +154,11 @@ export class HistoryManager {
       }
       case 'UPDATE_TEXT_BOX': {
         newTextBoxes = newTextBoxes.map((t) => (t.id === action.prev.id ? action.current : t));
+        break;
+      }
+      case 'UPDATE_STROKES': {
+        const curMap = new Map(action.current.map((s) => [s.id, s]));
+        newStrokes = newStrokes.map((s) => curMap.get(s.id) || s);
         break;
       }
       default:

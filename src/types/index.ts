@@ -139,6 +139,7 @@ export type HistoryAction =
   | { type: 'ADD_TEXT_BOX'; textBox: TextBox }
   | { type: 'DELETE_TEXT_BOX'; textBox: TextBox }
   | { type: 'UPDATE_TEXT_BOX'; prev: TextBox; current: TextBox }
+  | { type: 'UPDATE_STROKES'; prev: Stroke[]; current: Stroke[] }
   | { type: 'CHANGE_TEMPLATE'; pageId: string; prevTemplate: PaperTemplate; nextTemplate: PaperTemplate };
 
 export interface GoogleUser {

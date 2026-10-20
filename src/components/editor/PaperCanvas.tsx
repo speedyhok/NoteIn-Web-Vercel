@@ -6,8 +6,9 @@ import { renderPaperBackground } from '../../engine/paper';
 import { renderStrokes, renderStroke } from '../../engine/renderer';
 import { isStrokeIntersectedByEraser } from '../../engine/eraser';
 import { TextBoxOverlay } from './TextBoxOverlay';
+import { ImageOverlay } from './ImageOverlay';
 import { RulerOverlay, type RulerState } from './RulerOverlay';
-import { NoteinHand } from '../icons/NoteinIcons';
+import { GripVertical, Trash2, Copy, X } from 'lucide-react';
 
 export type ShapeMode = 'none' | 'line' | 'rect' | 'circle' | 'triangle' | 'arrow' | 'auto';
 
@@ -16,6 +17,15 @@ interface PaperCanvasProps {
   strokes: Stroke[];
   textBoxes: TextBox[];
   images?: NoteImage[];
+  selectedImageId?: string | null;
+  onSelectImage?: (id: string | null) => void;
+  onUpdateImagePosition?: (id: string, newX: number, newY: number) => void;
+  onCommitImagePosition?: (id: string, oldX: number, oldY: number, newX: number, newY: number) => void;
+  onUpdateImageSize?: (id: string, newW: number, newH: number) => void;
+  onCommitImageSize?: (id: string, oldW: number, oldH: number, newW: number, newH: number) => void;
+  onDeleteImage?: (id: string) => void;
+  onDuplicateImage?: (id: string) => void;
+  onCommitStrokesUpdate?: (updatedStrokes: Stroke[], prevStrokes?: Stroke[]) => void;
   activeTool: ToolType;
   currentColor: string;
   currentWidth: number;
@@ -244,11 +254,67 @@ function snapPointsToRuler(points: Point[], ruler: RulerState): Point[] {
   return nearRulerCount > points.length * 0.4 ? snapped : points;
 }
 
+
+// Check if point is inside polygon (Ray-casting)
+function isPointInPolygon(px: number, py: number, polygon: { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    const intersect = ((yi > py) !== (yj > py)) &&
+      (px < ((xj - xi) * (py - yi)) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// Distance from point to line segment
+function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+  if (l2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
+}
+
+// Check if a stroke is near a point (hit testing)
+function isStrokeNearPoint(stroke: Stroke, px: number, py: number, threshold = 16): boolean {
+  const pts = stroke.points;
+  if (!pts || pts.length === 0) return false;
+  if (pts.length === 1) {
+    return Math.hypot(pts[0].x - px, pts[0].y - py) <= threshold;
+  }
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (distToSegment(px, py, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y) <= threshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Check if stroke is enclosed by or intersects lasso polygon
+function isStrokeInLasso(stroke: Stroke, polygon: { x: number; y: number }[]): boolean {
+  if (!stroke.points || stroke.points.length === 0) return false;
+  for (const pt of stroke.points) {
+    if (isPointInPolygon(pt.x, pt.y, polygon)) return true;
+  }
+  return false;
+}
+
 export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   page,
   strokes,
   textBoxes,
   images = [],
+  selectedImageId,
+  onSelectImage,
+  onUpdateImagePosition,
+  onCommitImagePosition,
+  onUpdateImageSize,
+  onCommitImageSize,
+  onDeleteImage,
+  onDuplicateImage,
+  onCommitStrokesUpdate,
   activeTool,
   currentColor,
   currentWidth,
@@ -271,7 +337,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   onDuplicateTextBox,
   onUpdateTextBoxStyle,
   eraseHighlighterOnly = false,
-  onSelectTool,
+  onSelectTool: _onSelectTool,
   isDarkMode,
   shapeMode = 'none',
   isRulerActive = false,
@@ -279,9 +345,21 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const paperCanvasRef = useRef<HTMLCanvasElement>(null);
-  const imagesCanvasRef = useRef<HTMLCanvasElement>(null);
   const strokesCanvasRef = useRef<HTMLCanvasElement>(null);
   const activeCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Lasso & Stroke / Shape selection state
+  const [selectedStrokeIds, setSelectedStrokeIds] = useState<string[]>([]);
+  const [isDraggingSelection, setIsDraggingSelection] = useState(false);
+  const isDrawingLassoRef = useRef(false);
+  const lassoPointsRef = useRef<{ x: number; y: number }[]>([]);
+  const selectionDragStartRef = useRef<{
+    startPt: { x: number; y: number };
+    initialStrokes: Stroke[];
+    lastDx: number;
+    lastDy: number;
+    hasMoved: boolean;
+  } | null>(null);
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -327,43 +405,122 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
     }
   }, [page.width, page.height, page.template, isDarkMode, page.backgroundImage]);
 
-  // Render Embedded Page Images (NoteIn APK ImageEntity layer)
+  // Clear selected stroke IDs if switching away from lasso
   useEffect(() => {
-    const canvas = imagesCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
-    if (!ctx) return;
-
-    canvas.width = page.width * dpr;
-    canvas.height = page.height * dpr;
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, page.width, page.height);
-
-    if (!images || images.length === 0) return;
-
-    for (const imgItem of images) {
-      if (!imgItem.src) continue;
-      const img = new Image();
-      img.onload = () => {
-        ctx.save();
-        if (imgItem.opacity !== undefined && imgItem.opacity < 1) {
-          ctx.globalAlpha = imgItem.opacity;
-        }
-        if (imgItem.rotation) {
-          const cx = imgItem.x + imgItem.width / 2;
-          const cy = imgItem.y + imgItem.height / 2;
-          ctx.translate(cx, cy);
-          ctx.rotate((imgItem.rotation * Math.PI) / 180);
-          ctx.drawImage(img, -imgItem.width / 2, -imgItem.height / 2, imgItem.width, imgItem.height);
-        } else {
-          ctx.drawImage(img, imgItem.x, imgItem.y, imgItem.width, imgItem.height);
-        }
-        ctx.restore();
-      };
-      img.src = imgItem.src;
+    if (activeTool !== 'lasso') {
+      setSelectedStrokeIds([]);
     }
-  }, [images, page.width, page.height]);
+  }, [activeTool]);
+
+  // Lasso Selection Dragging Handlers
+  const handleSelectionPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const pagePt = screenToPage(e.clientX, e.clientY, rect, transform);
+
+    const selectedStrokes = strokes.filter((s) => selectedStrokeIds.includes(s.id));
+    setIsDraggingSelection(true);
+    selectionDragStartRef.current = {
+      startPt: pagePt,
+      initialStrokes: selectedStrokes.map((s) => ({
+        ...s,
+        points: s.points.map((p) => ({ ...p })),
+      })),
+      lastDx: 0,
+      lastDy: 0,
+      hasMoved: false,
+    };
+  };
+
+  const handleSelectionPointerMove = (e: React.PointerEvent) => {
+    if (!selectionDragStartRef.current) return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const pagePt = screenToPage(e.clientX, e.clientY, rect, transform);
+
+    const dx = pagePt.x - selectionDragStartRef.current.startPt.x;
+    const dy = pagePt.y - selectionDragStartRef.current.startPt.y;
+
+    if (!selectionDragStartRef.current.hasMoved && Math.hypot(dx, dy) > 2) {
+      selectionDragStartRef.current.hasMoved = true;
+    }
+
+    if (selectionDragStartRef.current.hasMoved) {
+      selectionDragStartRef.current.lastDx = dx;
+      selectionDragStartRef.current.lastDy = dy;
+      const updatedSelected = selectionDragStartRef.current.initialStrokes.map((s) => ({
+        ...s,
+        points: s.points.map((p) => ({
+          ...p,
+          x: Math.round(p.x + dx),
+          y: Math.round(p.y + dy),
+        })),
+      }));
+      const updateMap = new Map(updatedSelected.map((s) => [s.id, s]));
+      const nextAll = strokes.map((s) => updateMap.get(s.id) || s);
+      onStrokesLiveUpdate(nextAll);
+    }
+  };
+
+  const handleSelectionPointerUp = (e: React.PointerEvent) => {
+    if (!selectionDragStartRef.current) return;
+    e.stopPropagation();
+
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+
+    const { hasMoved, lastDx, lastDy, initialStrokes } = selectionDragStartRef.current;
+    selectionDragStartRef.current = null;
+    setIsDraggingSelection(false);
+
+    if (hasMoved && onCommitStrokesUpdate) {
+      const finalSelected = initialStrokes.map((s) => ({
+        ...s,
+        points: s.points.map((p) => ({
+          ...p,
+          x: Math.round(p.x + lastDx),
+          y: Math.round(p.y + lastDy),
+        })),
+      }));
+      onCommitStrokesUpdate(finalSelected, initialStrokes);
+    }
+  };
+
+  const handleDuplicateSelection = () => {
+    const selectedStrokes = strokes.filter((s) => selectedStrokeIds.includes(s.id));
+    if (selectedStrokes.length === 0) return;
+    const duplicated = selectedStrokes.map((s) => ({
+      ...s,
+      id: crypto.randomUUID(),
+      points: s.points.map((p) => ({ ...p, x: Math.round(p.x + 24), y: Math.round(p.y + 24) })),
+      createdAt: Date.now(),
+    }));
+    for (const d of duplicated) {
+      onAddStroke(d);
+    }
+    setSelectedStrokeIds(duplicated.map((d) => d.id));
+  };
+
+  const handleDeleteSelection = () => {
+    const selectedStrokes = strokes.filter((s) => selectedStrokeIds.includes(s.id));
+    if (selectedStrokes.length === 0) return;
+    onDeleteStrokesCommit(selectedStrokes);
+    setSelectedStrokeIds([]);
+  };
 
   // Render Completed Vector Strokes
   useEffect(() => {
@@ -453,8 +610,17 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
 
-    if (activeTool !== 'text' && selectedTextBoxId) {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const pagePt = screenToPage(e.clientX, e.clientY, rect, transform);
+
+    if (activeTool !== 'text' && activeTool !== 'lasso' && selectedTextBoxId) {
       onSelectTextBox(null);
+    }
+    if (activeTool !== 'lasso' && selectedImageId && onSelectImage) {
+      onSelectImage(null);
     }
 
     if (activeTool === 'pan' || (e.pointerType === 'touch' && e.altKey)) {
@@ -464,11 +630,12 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
       return;
     }
 
-    const container = containerRef.current;
-    if (!container) return;
-
-    const rect = container.getBoundingClientRect();
-    const pagePt = screenToPage(e.clientX, e.clientY, rect, transform);
+    if (activeTool === 'lasso') {
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+      isDrawingLassoRef.current = true;
+      lassoPointsRef.current = [pagePt];
+      return;
+    }
 
     if (activeTool === 'text') {
       // 1. Check if clicking inside an existing text box on the page
@@ -548,6 +715,34 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
       time: Date.now(),
     };
 
+    if (activeTool === 'lasso') {
+      if (isDrawingLassoRef.current) {
+        lassoPointsRef.current.push(pagePt);
+        const canvas = activeCanvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, page.width, page.height);
+            ctx.save();
+            ctx.strokeStyle = '#3f52ff';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.fillStyle = 'rgba(63, 82, 255, 0.08)';
+            ctx.beginPath();
+            const pts = lassoPointsRef.current;
+            ctx.moveTo(pts[0].x, pts[0].y);
+            for (let i = 1; i < pts.length; i++) {
+              ctx.lineTo(pts[i].x, pts[i].y);
+            }
+            ctx.stroke();
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+      }
+      return;
+    }
+
     if (activeTool === 'eraser') {
       checkEraserCollision(newPt);
       return;
@@ -580,6 +775,83 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
 
     if (!isDrawing) return;
     setIsDrawing(false);
+
+    if (activeTool === 'lasso') {
+      if (isDrawingLassoRef.current) {
+        isDrawingLassoRef.current = false;
+        const canvas = activeCanvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) ctx.clearRect(0, 0, page.width, page.height);
+        }
+
+        const rect = e.currentTarget.getBoundingClientRect();
+        const pagePt = screenToPage(e.clientX, e.clientY, rect, transform);
+        const pts = lassoPointsRef.current;
+        let totalDist = 0;
+        for (let i = 0; i < pts.length - 1; i++) {
+          totalDist += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+        }
+
+        if (totalDist > 20 && pts.length > 3) {
+          // Enclosed strokes
+          const enclosed = strokes.filter((s) => isStrokeInLasso(s, pts));
+          if (enclosed.length > 0) {
+            setSelectedStrokeIds(enclosed.map((s) => s.id));
+          } else {
+            // Check if lasso enclosed a text box or image
+            const enclosedBox = textBoxes.find((tb) =>
+              isPointInPolygon(tb.x + tb.width / 2, tb.y + tb.height / 2, pts)
+            );
+            if (enclosedBox) {
+              onSelectTextBox(enclosedBox.id);
+            }
+            const enclosedImg = images?.find((img) =>
+              isPointInPolygon(img.x + img.width / 2, img.y + img.height / 2, pts)
+            );
+            if (enclosedImg && onSelectImage) {
+              onSelectImage(enclosedImg.id);
+            }
+            setSelectedStrokeIds([]);
+          }
+        } else {
+          // Tap / Click detection: hit test closest stroke/shape
+          const tapped = [...strokes].reverse().find((s) => isStrokeNearPoint(s, pagePt.x, pagePt.y, 16));
+          if (tapped) {
+            setSelectedStrokeIds([tapped.id]);
+          } else {
+            // Check if clicked a text box
+            const clickedBox = textBoxes.find(
+              (tb) =>
+                pagePt.x >= tb.x &&
+                pagePt.x <= tb.x + tb.width &&
+                pagePt.y >= tb.y &&
+                pagePt.y <= tb.y + tb.height
+            );
+            if (clickedBox) {
+              onSelectTextBox(clickedBox.id);
+            } else {
+              // Check if clicked an image
+              const clickedImg = images?.find(
+                (img) =>
+                  pagePt.x >= img.x &&
+                  pagePt.x <= img.x + img.width &&
+                  pagePt.y >= img.y &&
+                  pagePt.y <= img.y + img.height
+              );
+              if (clickedImg && onSelectImage) {
+                onSelectImage(clickedImg.id);
+              } else {
+                setSelectedStrokeIds([]);
+                onSelectTextBox(null);
+                if (onSelectImage) onSelectImage(null);
+              }
+            }
+          }
+        }
+      }
+      return;
+    }
 
     if (activeTool === 'eraser') {
       if (erasedInGestureRef.current.size > 0) {
@@ -656,7 +928,29 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
     }
   };
 
+  // Selected Strokes Bounding Box
+  const selectedStrokes = strokes.filter((s) => selectedStrokeIds.includes(s.id));
+  let selectionBounds: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+  if (selectedStrokes.length > 0) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const stroke of selectedStrokes) {
+      for (const pt of stroke.points) {
+        if (pt.x < minX) minX = pt.x;
+        if (pt.y < minY) minY = pt.y;
+        if (pt.x > maxX) maxX = pt.x;
+        if (pt.y > maxY) maxY = pt.y;
+      }
+    }
+    if (minX !== Infinity && maxX !== -Infinity) {
+      selectionBounds = { minX, minY, maxX, maxY };
+    }
+  }
+
   const getCursor = () => {
+    if (activeTool === 'lasso') return isDraggingSelection ? 'grabbing' : 'crosshair';
     if (activeTool === 'pan') return isPanning ? 'grabbing' : 'grab';
     if (activeTool === 'eraser') return 'crosshair';
     if (activeTool === 'text') return 'text';
@@ -706,18 +1000,22 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
           }}
         />
 
-        {/* Layer 1.5: Embedded Page Images (Photos, diagrams, stickers) */}
-        <canvas
-          ref={imagesCanvasRef}
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            width: '100%',
-            height: '100%',
-            pointerEvents: 'none',
-          }}
-        />
+        {/* Layer 1.5: Interactive Embedded Page Images */}
+        {images && images.length > 0 && (
+          <ImageOverlay
+            images={images}
+            selectedImageId={selectedImageId || null}
+            onSelectImage={onSelectImage || (() => {})}
+            onUpdatePosition={onUpdateImagePosition || (() => {})}
+            onCommitPosition={onCommitImagePosition || (() => {})}
+            onUpdateSize={onUpdateImageSize || (() => {})}
+            onCommitSize={onCommitImageSize || (() => {})}
+            onDeleteImage={onDeleteImage || (() => {})}
+            onDuplicateImage={onDuplicateImage}
+            zoom={transform.zoom}
+            activeTool={activeTool}
+          />
+        )}
 
         {/* Layer 2: Completed Vector Strokes */}
         <canvas
@@ -762,6 +1060,134 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
           onUpdateTextBoxStyle={onUpdateTextBoxStyle}
           zoom={transform.zoom}
         />
+
+        {/* Layer 5: Lasso Selection Bounding Box & Floating Action Menu */}
+        {selectionBounds && selectedStrokes.length > 0 && (
+          <div
+            onPointerDown={handleSelectionPointerDown}
+            onPointerMove={handleSelectionPointerMove}
+            onPointerUp={handleSelectionPointerUp}
+            onPointerCancel={handleSelectionPointerUp}
+            style={{
+              position: 'absolute',
+              left: `${selectionBounds.minX - 8}px`,
+              top: `${selectionBounds.minY - 8}px`,
+              width: `${selectionBounds.maxX - selectionBounds.minX + 16}px`,
+              height: `${selectionBounds.maxY - selectionBounds.minY + 16}px`,
+              border: '2px dashed #3f52ff',
+              borderRadius: '6px',
+              backgroundColor: isDraggingSelection
+                ? 'rgba(63, 82, 255, 0.12)'
+                : 'rgba(63, 82, 255, 0.05)',
+              boxShadow:
+                '0 0 0 1px rgba(255,255,255,0.8), 0 4px 16px rgba(63, 82, 255, 0.25)',
+              cursor: isDraggingSelection ? 'grabbing' : 'grab',
+              pointerEvents: 'auto',
+              zIndex: 25,
+            }}
+          >
+            {/* Floating Action Menu for Selected Shapes/Strokes */}
+            <div
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                top: '-32px',
+                left: '0',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '6px',
+                padding: '2px 6px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                userSelect: 'none',
+                pointerEvents: 'auto',
+                zIndex: 30,
+              }}
+            >
+              <div
+                onPointerDown={handleSelectionPointerDown}
+                onPointerMove={handleSelectionPointerMove}
+                onPointerUp={handleSelectionPointerUp}
+                onPointerCancel={handleSelectionPointerUp}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  color: '#3f52ff',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  paddingRight: '4px',
+                  cursor: isDraggingSelection ? 'grabbing' : 'grab',
+                }}
+              >
+                <GripVertical size={13} />
+                <span>Move Shape</span>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDuplicateSelection();
+                }}
+                title="Duplicate Shape"
+                style={{
+                  padding: '3px 5px',
+                  borderRadius: '4px',
+                  color: 'var(--text-secondary)',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <Copy size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteSelection();
+                }}
+                title="Delete Shape"
+                style={{
+                  padding: '3px 5px',
+                  borderRadius: '4px',
+                  color: '#ef4444',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <Trash2 size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedStrokeIds([]);
+                }}
+                title="Deselect"
+                style={{
+                  padding: '3px 5px',
+                  borderRadius: '4px',
+                  color: 'var(--text-muted)',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Interactive Translucent Ruler Overlay */}
@@ -777,50 +1203,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
           isDarkMode={isDarkMode}
         />
       )}
-      {/* Dedicated Hand / Move Screen Badge */}
-      {activeTool === 'pan' && (
-        <div
-          className="animate-slide-up"
-          style={{
-            position: 'absolute',
-            bottom: '24px',
-            right: '24px',
-            zIndex: 35,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: '9999px',
-            padding: '8px 16px',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.14)',
-            pointerEvents: 'auto',
-          }}
-        >
-          <NoteinHand size={18} color="#3f52ff" />
-          <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            Hand Tool: Drag anywhere to move screen
-          </span>
-          {onSelectTool && (
-            <button
-              onClick={() => onSelectTool('pen')}
-              style={{
-                marginLeft: '4px',
-                padding: '4px 10px',
-                borderRadius: '9999px',
-                backgroundColor: '#3f52ff',
-                color: '#ffffff',
-                border: 'none',
-                fontSize: '11px',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Done Moving
-            </button>
-          )}
-        </div>
-      )}
+
     </div>
   );
 };
