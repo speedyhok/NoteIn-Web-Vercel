@@ -391,7 +391,20 @@ export function isDriveAuthorized(): boolean {
 
 export async function signInAndAuthorizeDrive(): Promise<{ user: GoogleUser; token: string }> {
   const token = await requestDriveAccessToken(true);
-  const user = await fetchGoogleProfileFromApi(token);
+  let user: GoogleUser;
+  try {
+    user = await fetchGoogleProfileFromApi(token);
+  } catch (profileErr) {
+    console.warn('UserInfo fetch warning, falling back to local or default user:', profileErr);
+    user = getGoogleUser() || {
+      id: 'google_user',
+      name: 'Google User',
+      email: 'Connected Account',
+      picture: '',
+      isLiveDrive: true,
+    };
+    saveGoogleUser(user);
+  }
   return { user, token };
 }
 
@@ -810,8 +823,8 @@ export async function listDriveFiles(searchTerm?: string): Promise<GooglePickedF
     headers: { Authorization: `Bearer ${token}` },
   });
 
-  if (res.status === 401 || res.status === 403) {
-    // If permission insufficient or token expired, force re-authorization
+  if (res.status === 401) {
+    // If token expired, force re-authorization once
     token = await requestDriveAccessToken(true);
     res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
@@ -820,7 +833,13 @@ export async function listDriveFiles(searchTerm?: string): Promise<GooglePickedF
 
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `Failed to fetch files from Google Drive (${res.status})`);
+    const rawMsg = errData?.error?.message || `Failed to fetch files from Google Drive (${res.status})`;
+    if (res.status === 403 && (rawMsg.includes('has not been used') || rawMsg.includes('disabled') || rawMsg.includes('Enable it') || rawMsg.includes('Drive API'))) {
+      throw new Error(
+        'Google Drive API is not enabled in your Google Cloud Project. Please enable it at: https://console.cloud.google.com/apis/library/drive.googleapis.com'
+      );
+    }
+    throw new Error(rawMsg);
   }
 
   const data = await res.json();
