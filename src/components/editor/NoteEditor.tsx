@@ -74,6 +74,49 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     panY: 0,
   });
 
+  // Floating Bottom Page Navigation Auto-Hide on Inactivity
+  const [isPageBarVisible, setIsPageBarVisible] = useState(true);
+  const isHoveringPageBarRef = useRef(false);
+  const hidePageBarTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const resetPageBarInactivityTimer = useCallback(() => {
+    setIsPageBarVisible(true);
+    if (hidePageBarTimeoutRef.current) {
+      clearTimeout(hidePageBarTimeoutRef.current);
+    }
+    hidePageBarTimeoutRef.current = setTimeout(() => {
+      if (!isHoveringPageBarRef.current) {
+        setIsPageBarVisible(false);
+      }
+    }, 3000);
+  }, []);
+
+  // Show page bar on mouse movement, key activity, or touch, hide after 3s inactivity
+  useEffect(() => {
+    const handleActivity = () => {
+      resetPageBarInactivityTimer();
+    };
+
+    window.addEventListener('pointermove', handleActivity, { passive: true });
+    window.addEventListener('keydown', handleActivity, { passive: true });
+    window.addEventListener('touchstart', handleActivity, { passive: true });
+
+    resetPageBarInactivityTimer();
+
+    return () => {
+      window.removeEventListener('pointermove', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      window.removeEventListener('touchstart', handleActivity);
+      if (hidePageBarTimeoutRef.current) {
+        clearTimeout(hidePageBarTimeoutRef.current);
+      }
+    };
+  }, [resetPageBarInactivityTimer]);
+
+  useEffect(() => {
+    resetPageBarInactivityTimer();
+  }, [currentPageIndex, resetPageBarInactivityTimer]);
+
   // Autosave status
   const [isSaving, setIsSaving] = useState(false);
   const saveStrokesTimeoutRef = useRef<number | null>(null);
@@ -1127,11 +1170,27 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
       {/* Floating Bottom Page Navigation Controls */}
       {pages.length > 0 && (
         <div
+          onMouseEnter={() => {
+            isHoveringPageBarRef.current = true;
+            setIsPageBarVisible(true);
+            if (hidePageBarTimeoutRef.current) {
+              clearTimeout(hidePageBarTimeoutRef.current);
+            }
+          }}
+          onMouseLeave={() => {
+            isHoveringPageBarRef.current = false;
+            resetPageBarInactivityTimer();
+          }}
           style={{
             position: 'fixed',
             bottom: '20px',
             left: '50%',
-            transform: 'translateX(-50%)',
+            transform: isPageBarVisible
+              ? 'translateX(-50%) translateY(0)'
+              : 'translateX(-50%) translateY(28px)',
+            opacity: isPageBarVisible ? 1 : 0,
+            pointerEvents: isPageBarVisible ? 'auto' : 'none',
+            transition: 'opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
