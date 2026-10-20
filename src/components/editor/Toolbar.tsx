@@ -268,6 +268,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const [activePenSlot, setActivePenSlot] = useState<1 | 2 | 3>(() => (activeTool === 'highlighter' ? 3 : 1));
 
   // Floating Toolbar Movement & Orientation State
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [toolbarOrientation, setToolbarOrientation] = useState<'horizontal' | 'vertical'>('horizontal');
   const [toolbarPos, setToolbarPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -846,10 +847,137 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           MOVABLE & ORIENTABLE NOTEIN ANDROID FLOATING TOOLBAR
           Can be freely dragged anywhere on screen and switched between horizontal/vertical
           ========================================================================= */}
-      <div
-        className="glass-panel"
-        style={{
-          position: 'fixed',
+      {isCollapsed ? (
+        /* Collapsed Floating Tool Badge (NoteIn Android Compact Penbox) */
+        <div
+          className="glass-panel"
+          style={{
+            position: 'fixed',
+            left: `${currentPos.x}px`,
+            top: `${currentPos.y}px`,
+            zIndex: 48,
+            borderRadius: '9999px',
+            padding: '5px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.06)',
+            backgroundColor: 'var(--glass-bg, rgba(255, 255, 255, 0.95))',
+            backdropFilter: 'blur(16px)',
+            border: '1.5px solid var(--border-subtle)',
+            userSelect: 'none',
+            transition: isDragging ? 'none' : 'all 0.2s ease',
+          }}
+        >
+          {/* Drag Handle Grip */}
+          <div
+            onPointerDown={handleDragPointerDown}
+            style={{
+              padding: '2px',
+              cursor: isDragging ? 'grabbing' : 'grab',
+              color: 'var(--text-muted)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            title="Drag compact pen bar anywhere on screen"
+          >
+            <GripVertical size={14} />
+          </div>
+
+          {/* Active Tool Preview Pill */}
+          <div
+            onClick={() => setIsCollapsed(false)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              padding: '2px 4px',
+            }}
+            title="Click to expand pen bar"
+          >
+            {activeTool === 'pen' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: currentColor,
+                    border: '1.5px solid rgba(0,0,0,0.15)',
+                    display: 'inline-block',
+                  }}
+                />
+                <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Pen {currentWidth}px
+                </span>
+              </div>
+            )}
+            {activeTool === 'highlighter' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span
+                  style={{
+                    width: '12px',
+                    height: '8px',
+                    borderRadius: '2px',
+                    backgroundColor: currentColor,
+                    opacity: 0.75,
+                    display: 'inline-block',
+                  }}
+                />
+                <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Highlighter {currentWidth}px
+                </span>
+              </div>
+            )}
+            {activeTool === 'eraser' && (
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Eraser
+              </span>
+            )}
+            {activeTool === 'pan' && (
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Hand
+              </span>
+            )}
+            {activeTool === 'text' && (
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Text
+              </span>
+            )}
+            {activeTool === 'lasso' && (
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Lasso
+              </span>
+            )}
+          </div>
+
+          {/* Expand Toolbar Button */}
+          <button
+            onClick={() => setIsCollapsed(false)}
+            style={{
+              padding: '4px 6px',
+              borderRadius: '9999px',
+              backgroundColor: 'rgba(63, 82, 255, 0.12)',
+              border: 'none',
+              color: '#3f52ff',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            title="Expand Pen Bar"
+          >
+            <Maximize2 size={14} />
+          </button>
+        </div>
+      ) : (
+        /* Full Movable Floating Toolbar */
+        <div
+          className="glass-panel"
+          style={{
+            position: 'fixed',
           left: `${currentPos.x}px`,
           top: `${currentPos.y}px`,
           zIndex: 48,
@@ -1636,23 +1764,26 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <NoteinRuler size={19} />
           </button>
 
-          {/* Fit to Screen Quick Action */}
+          {/* Collapse Pen Bar Action (Collapses only this pen toolbar without altering page view) */}
           <button
-            onClick={onFitPage}
+            onClick={() => {
+              closeAllPopovers();
+              setIsCollapsed(true);
+            }}
             style={{
               padding: '6px 8px',
               borderRadius: '8px',
-              color: isCoverMode ? '#3f52ff' : 'var(--text-secondary)',
-              backgroundColor: isCoverMode ? 'rgba(63, 82, 255, 0.14)' : 'transparent',
+              color: 'var(--text-secondary)',
+              backgroundColor: 'transparent',
               border: 'none',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
             }}
-            title={isCoverMode ? 'Fit Page Overview' : 'Fit Page to Screen'}
+            title="Collapse Pen Bar (Minimize to compact floating badge)"
           >
-            {isCoverMode ? <Minimize2 size={19} /> : <Maximize2 size={19} />}
+            <Minimize2 size={19} />
           </button>
         </div>
 
@@ -1771,6 +1902,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
         </div>
       </div>
+      )}
 
       {/* =========================================================================
           POPOVERS (Positioned smartly relative to floating toolbar)
