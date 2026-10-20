@@ -5,7 +5,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 import { getSql } from './sqlHelper';
 import * as db from '../db';
-import type { Notebook, Page, Stroke, TextBox, NoteinPackage, PageOrientation, PaperTemplate, PaperType } from '../types';
+import type { Notebook, Page, Stroke, TextBox, NoteImage, NoteinPackage, PageOrientation, PaperTemplate, PaperType } from '../types';
 
 // Setup PDF.js worker
 try {
@@ -21,6 +21,38 @@ export interface ImportResult {
   notebook: Notebook;
   pages: Page[];
   initialPageId: string;
+  images?: NoteImage[];
+}
+
+
+/**
+ * Safely converts a JSZip file entry to a Base64 data URL in both browser and Node/Vitest environments.
+ */
+export async function zipFileToDataUrl(zipFile: JSZip.JSZipObject): Promise<string> {
+  const buffer = await zipFile.async('uint8array');
+  let mime = 'image/png';
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    mime = 'image/jpeg';
+  } else if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+  ) {
+    mime = 'image/webp';
+  }
+
+  let base64 = '';
+  if (typeof Buffer !== 'undefined') {
+    base64 = Buffer.from(buffer).toString('base64');
+  } else {
+    let binary = '';
+    const chunk = 8192;
+    for (let i = 0; i < buffer.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, Array.from(buffer.subarray(i, i + chunk)));
+    }
+    base64 = btoa(binary);
+  }
+  return `data:${mime};base64,${base64}`;
 }
 
 const DEFAULT_TEMPLATE: PaperTemplate = {
@@ -133,6 +165,44 @@ export async function importNoteinAndroidZip(
     pageIdMap.set(oldId, crypto.randomUUID());
   }
 
+  // 5. Scan ZIP for embedded PDF or theme background images
+  let pdfZipFile: JSZip.JSZipObject | null = null;
+  let localThemeZipFile: JSZip.JSZipObject | null = null;
+  const zipImageMap = new Map<string, JSZip.JSZipObject>();
+
+  for (const [entryName, zipEntry] of Object.entries(zip.files)) {
+    if (zipEntry.dir) continue;
+    const lower = entryName.toLowerCase();
+    if (entryName.startsWith('note_pdf_') || lower.endsWith('.pdf')) {
+      pdfZipFile = zipEntry;
+    } else if (entryName.startsWith('note_local_uri_theme_')) {
+      localThemeZipFile = zipEntry;
+    } else if (
+      entryName.startsWith('note_image_') ||
+      lower.endsWith('.png') ||
+      lower.endsWith('.jpg') ||
+      lower.endsWith('.jpeg') ||
+      lower.endsWith('.webp')
+    ) {
+      if (!lower.includes('tn_') && !lower.includes('thumbnail')) {
+        zipImageMap.set(entryName, zipEntry);
+        const cleanBase = entryName.replace(/^note_image_/, '').split('/').pop() || entryName;
+        zipImageMap.set(cleanBase, zipEntry);
+      }
+    }
+  }
+
+  let pdfDoc: any = null;
+  if (pdfZipFile) {
+    try {
+      const pdfBytes = await pdfZipFile.async('uint8array');
+      const loadingTask = pdfjsLib.getDocument({ data: pdfBytes, useSystemFonts: true });
+      pdfDoc = await loadingTask.promise;
+    } catch (err) {
+      console.warn('Could not parse embedded PDF in NoteIn archive:', err);
+    }
+  }
+
   // 5. Construct Pages
   const pages: Page[] = [];
   for (let i = 0; i < pageList.length; i++) {
@@ -191,6 +261,33 @@ export async function importNoteinAndroidZip(
       bgColor = androidColorToCss(paperTheme.baseTheme.color).hex;
     }
 
+    // Check for page background image from PDF or theme
+    let pageBgDataUrl: string | undefined = undefined;
+    if (pdfDoc && i < pdfDoc.numPages) {
+      try {
+        const pdfPage = await pdfDoc.getPage(i + 1);
+        const viewport = pdfPage.getViewport({ scale: 1.5 });
+        if (typeof document !== 'undefined') {
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+            pageBgDataUrl = canvas.toDataURL('image/png', 0.92);
+          }
+        }
+      } catch (err) {
+        console.warn(`Error rendering embedded PDF page ${i + 1}:`, err);
+      }
+    }
+
+    if (!pageBgDataUrl && localThemeZipFile) {
+      try {
+        pageBgDataUrl = await zipFileToDataUrl(localThemeZipFile);
+      } catch {}
+    }
+
     pages.push({
       id: newPageId,
       notebookId: newNotebookId,
@@ -206,6 +303,7 @@ export async function importNoteinAndroidZip(
       width: paperSpec.width || 1240,
       height: paperSpec.height || 1754,
       orientation,
+      backgroundImage: pageBgDataUrl,
       createdAt: pCreationTime,
       updatedAt: lastModTime,
     });
@@ -295,8 +393,6 @@ export async function importNoteinAndroidZip(
     tbStmt.free();
   } catch {}
 
-  sqlDb.close();
-
   // 8. Create Notebook Record
   const notebook: Notebook = {
     id: newNotebookId,
@@ -312,6 +408,121 @@ export async function importNoteinAndroidZip(
     updatedAt: lastModTime,
   };
 
+  // 8. Query ImageEntity (Embedded photos, diagrams, stickers)
+  const noteImages: NoteImage[] = [];
+  const processedImageFiles = new Set<string>();
+
+  try {
+    const tableCheck = sqlDb.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='ImageEntity'");
+    if (tableCheck.length > 0 && tableCheck[0].values.length > 0) {
+      const imgStmt = sqlDb.prepare(
+        'SELECT id, page_id, uri, bounds, rotation, "left", "top", "right", "bottom", creation_time FROM ImageEntity'
+      );
+      while (imgStmt.step()) {
+        const row = imgStmt.getAsObject();
+        const oldPageId = row.page_id as string;
+        const newPageId = pageIdMap.get(oldPageId);
+        if (!newPageId) continue;
+
+        const rawUri = (row.uri as string) || '';
+        const uriBase = rawUri.split('/').pop() || rawUri;
+
+        let zipEntry =
+          zipImageMap.get(`note_image_${uriBase}`) ||
+          zipImageMap.get(uriBase) ||
+          zipImageMap.get(rawUri) ||
+          zip.file(rawUri) ||
+          zip.file(`note_image_${uriBase}`);
+
+        if (!zipEntry) {
+          for (const [k, v] of zipImageMap.entries()) {
+            if (k.includes(uriBase) || uriBase.includes(k)) {
+              zipEntry = v;
+              break;
+            }
+          }
+        }
+
+        let left = typeof row.left === 'number' ? row.left : 60;
+        let top = typeof row.top === 'number' ? row.top : 60;
+        let right = typeof row.right === 'number' ? row.right : 460;
+        let bottom = typeof row.bottom === 'number' ? row.bottom : 360;
+
+        if (typeof row.bounds === 'string') {
+          try {
+            const b = JSON.parse(row.bounds);
+            if (typeof b.left === 'number') left = b.left;
+            if (typeof b.top === 'number') top = b.top;
+            if (typeof b.right === 'number') right = b.right;
+            if (typeof b.bottom === 'number') bottom = b.bottom;
+            if (typeof b.width === 'number' && typeof b.x === 'number') {
+              left = b.x;
+              right = b.x + b.width;
+            }
+            if (typeof b.height === 'number' && typeof b.y === 'number') {
+              top = b.y;
+              bottom = b.y + b.height;
+            }
+          } catch {}
+        }
+
+        const width = Math.max(30, right - left);
+        const height = Math.max(30, bottom - top);
+        const rotation = typeof row.rotation === 'number' ? row.rotation : 0;
+
+        let dataUrl = '';
+        if (zipEntry) {
+          dataUrl = await zipFileToDataUrl(zipEntry);
+          processedImageFiles.add(zipEntry.name);
+        }
+
+        if (dataUrl) {
+          noteImages.push({
+            id: crypto.randomUUID(),
+            pageId: newPageId,
+            src: dataUrl,
+            x: Math.round(left),
+            y: Math.round(top),
+            width: Math.round(width),
+            height: Math.round(height),
+            rotation,
+            opacity: 1.0,
+            createdAt: (row.creation_time as number) || creationTime,
+          });
+        }
+      }
+      imgStmt.free();
+    }
+  } catch (err) {
+    console.warn('Error querying ImageEntity:', err);
+  } finally {
+    try {
+      sqlDb.close();
+    } catch {}
+  }
+
+  // Fallback: If zip contains note_image_* files not referenced in ImageEntity
+  for (const [entryName, zipEntry] of zipImageMap.entries()) {
+    if (entryName.startsWith('note_image_') && !processedImageFiles.has(zipEntry.name) && pages.length > 0) {
+      try {
+        const dataUrl = await zipFileToDataUrl(zipEntry);
+        noteImages.push({
+          id: crypto.randomUUID(),
+          pageId: pages[0].id,
+          src: dataUrl,
+          x: 80,
+          y: 100,
+          width: Math.min(600, pages[0].width - 160),
+          height: Math.min(500, pages[0].height - 200),
+          rotation: 0,
+          opacity: 1.0,
+          createdAt: creationTime,
+        });
+        processedImageFiles.add(zipEntry.name);
+      } catch {}
+    }
+  }
+
   // 9. Persist to Dexie
   await (db as any).db.transaction(
     'rw',
@@ -319,6 +530,7 @@ export async function importNoteinAndroidZip(
     (db as any).db.pages,
     (db as any).db.strokes,
     (db as any).db.textBoxes,
+    (db as any).db.noteImages,
     async () => {
       await (db as any).db.notebooks.put(notebook);
       await (db as any).db.pages.bulkPut(pages);
@@ -328,6 +540,9 @@ export async function importNoteinAndroidZip(
       if (textBoxes.length > 0) {
         await (db as any).db.textBoxes.bulkPut(textBoxes);
       }
+      if (noteImages.length > 0) {
+        await (db as any).db.noteImages.bulkPut(noteImages);
+      }
     }
   );
 
@@ -335,6 +550,7 @@ export async function importNoteinAndroidZip(
     notebook,
     pages,
     initialPageId: pages[0].id,
+    images: noteImages,
   };
 }
 
@@ -430,8 +646,19 @@ export async function importNoteinPackage(
       updatedAt: now,
     }));
 
+  // Remap and insert images
+  const originalImages = pkg.images || [];
+  const noteImages: NoteImage[] = originalImages
+    .filter((img) => idMap.has(img.pageId))
+    .map((img) => ({
+      ...img,
+      id: crypto.randomUUID(),
+      pageId: idMap.get(img.pageId)!,
+      createdAt: now,
+    }));
+
   // Save to Dexie
-  await (db as any).db.transaction('rw', (db as any).db.notebooks, (db as any).db.pages, (db as any).db.strokes, (db as any).db.textBoxes, async () => {
+  await (db as any).db.transaction('rw', (db as any).db.notebooks, (db as any).db.pages, (db as any).db.strokes, (db as any).db.textBoxes, (db as any).db.noteImages, async () => {
     await (db as any).db.notebooks.add(notebook);
     await (db as any).db.pages.bulkAdd(pages);
     if (strokes.length > 0) {
@@ -440,12 +667,16 @@ export async function importNoteinPackage(
     if (textBoxes.length > 0) {
       await (db as any).db.textBoxes.bulkAdd(textBoxes);
     }
+    if (noteImages.length > 0) {
+      await (db as any).db.noteImages.bulkAdd(noteImages);
+    }
   });
 
   return {
     notebook,
     pages,
     initialPageId: pages[0].id,
+    images: noteImages,
   };
 }
 
@@ -813,12 +1044,15 @@ export async function exportNotebookAsNotein(notebookId: string): Promise<string
   const pages = await db.getPagesForNotebook(notebookId);
   const allStrokes: Stroke[] = [];
   const allTextBoxes: TextBox[] = [];
+  const allImages: NoteImage[] = [];
 
   for (const p of pages) {
     const strokes = await db.getStrokesForPage(p.id);
     const textBoxes = await db.getTextBoxesForPage(p.id);
+    const images = await db.getImagesForPage(p.id);
     allStrokes.push(...strokes);
     allTextBoxes.push(...textBoxes);
+    allImages.push(...images);
   }
 
   const pkg: NoteinPackage = {
@@ -829,6 +1063,7 @@ export async function exportNotebookAsNotein(notebookId: string): Promise<string
     pages,
     strokes: allStrokes,
     textBoxes: allTextBoxes,
+    images: allImages,
   };
 
   const json = JSON.stringify(pkg, null, 2);

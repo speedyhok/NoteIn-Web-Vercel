@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { Notebook, Page, Stroke, TextBox } from '../../types';
+import type { Notebook, Page, Stroke, TextBox, NoteImage } from '../../types';
 import * as db from '../../db';
 import { renderPaperBackground } from '../../engine/paper';
 import { renderStrokes } from '../../engine/renderer';
@@ -15,6 +15,7 @@ export const NotebookPagePreview: React.FC<NotebookPagePreviewProps> = ({ notebo
   const [page, setPage] = useState<Page | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
+  const [images, setImages] = useState<NoteImage[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -24,14 +25,16 @@ export const NotebookPagePreview: React.FC<NotebookPagePreviewProps> = ({ notebo
         if (!active) return;
         const firstPage = pages[0] || null;
         if (firstPage) {
-          const [loadedStrokes, loadedBoxes] = await Promise.all([
+          const [loadedStrokes, loadedBoxes, loadedImages] = await Promise.all([
             db.getStrokesForPage(firstPage.id),
             db.getTextBoxesForPage(firstPage.id),
+            db.getImagesForPage(firstPage.id),
           ]);
           if (!active) return;
           setPage(firstPage);
           setStrokes(loadedStrokes);
           setTextBoxes(loadedBoxes);
+          setImages(loadedImages);
         }
       } catch (err) {
         console.warn('Preview load error:', err);
@@ -88,6 +91,28 @@ export const NotebookPagePreview: React.FC<NotebookPagePreviewProps> = ({ notebo
       img.src = page.backgroundImage;
     }
 
+    // 2.5 Render embedded images
+    if (images.length > 0) {
+      for (const imgItem of images) {
+        if (!imgItem.src) continue;
+        const img = new Image();
+        img.onload = () => {
+          ctx.save();
+          if (imgItem.rotation) {
+            const cx = imgItem.x + imgItem.width / 2;
+            const cy = imgItem.y + imgItem.height / 2;
+            ctx.translate(cx, cy);
+            ctx.rotate((imgItem.rotation * Math.PI) / 180);
+            ctx.drawImage(img, -imgItem.width / 2, -imgItem.height / 2, imgItem.width, imgItem.height);
+          } else {
+            ctx.drawImage(img, imgItem.x, imgItem.y, imgItem.width, imgItem.height);
+          }
+          ctx.restore();
+        };
+        img.src = imgItem.src;
+      }
+    }
+
     // 3. Render real vector handwriting and strokes
     if (strokes.length > 0) {
       renderStrokes(ctx, strokes);
@@ -97,7 +122,7 @@ export const NotebookPagePreview: React.FC<NotebookPagePreviewProps> = ({ notebo
     renderTextBoxes(ctx, textBoxes);
 
     ctx.restore();
-  }, [page, strokes, textBoxes, sheetWidth, sheetHeight, pageWidth, pageHeight, template]);
+  }, [page, strokes, textBoxes, images, sheetWidth, sheetHeight, pageWidth, pageHeight, template]);
 
   function renderTextBoxes(ctx: CanvasRenderingContext2D, boxes: TextBox[]) {
     for (const tb of boxes) {

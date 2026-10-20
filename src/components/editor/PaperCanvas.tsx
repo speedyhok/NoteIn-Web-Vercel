@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import type { Page, Stroke, TextBox, ToolType, ViewportTransform, Point } from '../../types';
+import type { Page, Stroke, TextBox, NoteImage, ToolType, ViewportTransform, Point } from '../../types';
 import { screenToPage, clampZoom } from '../../engine/transform';
 import { calculateBoundingBox } from '../../engine/spline';
 import { renderPaperBackground } from '../../engine/paper';
@@ -15,6 +15,7 @@ interface PaperCanvasProps {
   page: Page;
   strokes: Stroke[];
   textBoxes: TextBox[];
+  images?: NoteImage[];
   activeTool: ToolType;
   currentColor: string;
   currentWidth: number;
@@ -247,6 +248,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
   page,
   strokes,
   textBoxes,
+  images = [],
   activeTool,
   currentColor,
   currentWidth,
@@ -277,6 +279,7 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const paperCanvasRef = useRef<HTMLCanvasElement>(null);
+  const imagesCanvasRef = useRef<HTMLCanvasElement>(null);
   const strokesCanvasRef = useRef<HTMLCanvasElement>(null);
   const activeCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -323,6 +326,44 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
       img.src = page.backgroundImage;
     }
   }, [page.width, page.height, page.template, isDarkMode, page.backgroundImage]);
+
+  // Render Embedded Page Images (NoteIn APK ImageEntity layer)
+  useEffect(() => {
+    const canvas = imagesCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    if (!ctx) return;
+
+    canvas.width = page.width * dpr;
+    canvas.height = page.height * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, page.width, page.height);
+
+    if (!images || images.length === 0) return;
+
+    for (const imgItem of images) {
+      if (!imgItem.src) continue;
+      const img = new Image();
+      img.onload = () => {
+        ctx.save();
+        if (imgItem.opacity !== undefined && imgItem.opacity < 1) {
+          ctx.globalAlpha = imgItem.opacity;
+        }
+        if (imgItem.rotation) {
+          const cx = imgItem.x + imgItem.width / 2;
+          const cy = imgItem.y + imgItem.height / 2;
+          ctx.translate(cx, cy);
+          ctx.rotate((imgItem.rotation * Math.PI) / 180);
+          ctx.drawImage(img, -imgItem.width / 2, -imgItem.height / 2, imgItem.width, imgItem.height);
+        } else {
+          ctx.drawImage(img, imgItem.x, imgItem.y, imgItem.width, imgItem.height);
+        }
+        ctx.restore();
+      };
+      img.src = imgItem.src;
+    }
+  }, [images, page.width, page.height]);
 
   // Render Completed Vector Strokes
   useEffect(() => {
@@ -655,6 +696,19 @@ export const PaperCanvas: React.FC<PaperCanvasProps> = ({
         {/* Layer 1: Paper Background */}
         <canvas
           ref={paperCanvasRef}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: '100%',
+            height: '100%',
+            pointerEvents: 'none',
+          }}
+        />
+
+        {/* Layer 1.5: Embedded Page Images (Photos, diagrams, stickers) */}
+        <canvas
+          ref={imagesCanvasRef}
           style={{
             position: 'absolute',
             left: 0,

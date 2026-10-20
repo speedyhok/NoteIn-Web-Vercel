@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { Notebook, Page, Stroke, TextBox, ToolType, ViewportTransform, PaperTemplate, PageOrientation } from '../../types';
+import type { Notebook, Page, Stroke, TextBox, NoteImage, ToolType, ViewportTransform, PaperTemplate, PageOrientation } from '../../types';
 import * as db from '../../db';
 import { fitPageToContainer, coverPageToContainer } from '../../engine/transform';
 import { detectCodeSnippet, highlightCodeToHtml } from '../../engine/syntaxHighlighter';
@@ -38,6 +38,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   // Drawing State
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
+  const [images, setImages] = useState<NoteImage[]>([]);
   const [activeTool, setActiveTool] = useState<ToolType>('pen');
   const [currentColor, setCurrentColor] = useState<string>('#1d4ed8');
   const [currentWidth, setCurrentWidth] = useState<number>(3);
@@ -149,10 +150,12 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     Promise.all([
       db.getStrokesForPage(currentPage.id),
       db.getTextBoxesForPage(currentPage.id),
-    ]).then(([loadedStrokes, loadedTextBoxes]) => {
+      db.getImagesForPage(currentPage.id),
+    ]).then(([loadedStrokes, loadedTextBoxes, loadedImages]) => {
       if (isMounted) {
         setStrokes(loadedStrokes);
         setTextBoxes(loadedTextBoxes);
+        setImages(loadedImages);
       }
     });
 
@@ -619,6 +622,69 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     triggerAutosaveTextBoxes(currentPage.id, updatedList);
   };
 
+  // Insert Image file handler (upload or paste)
+  const handleInsertImageFile = useCallback((file: File) => {
+    if (!currentPage) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      if (!dataUrl) return;
+      const img = new Image();
+      img.onload = () => {
+        const maxW = Math.min(600, currentPage.width * 0.75);
+        const scale = Math.min(1, maxW / (img.width || 400));
+        const width = Math.round((img.width || 400) * scale);
+        const height = Math.round((img.height || 300) * scale);
+        const x = Math.max(20, Math.round((currentPage.width - width) / 2));
+        const y = Math.max(20, Math.round((currentPage.height - height) / 3));
+
+        const newImg: NoteImage = {
+          id: crypto.randomUUID(),
+          pageId: currentPage.id,
+          src: dataUrl,
+          x,
+          y,
+          width,
+          height,
+          rotation: 0,
+          opacity: 1,
+          createdAt: Date.now(),
+        };
+
+        db.addNoteImage(newImg).then(() => {
+          setImages((prev) => [...prev, newImg]);
+        });
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  }, [currentPage]);
+
+  // Global Clipboard Image Paste
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          const file = items[i].getAsFile();
+          if (file) {
+            e.preventDefault();
+            handleInsertImageFile(file);
+            break;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [handleInsertImageFile]);
+
   // 7. Undo / Redo
   const handleUndo = useCallback(() => {
     if (!currentPage || !historyRef.current.canUndo()) return;
@@ -887,6 +953,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           onToggleEraseHighlighterOnly={() => setEraseHighlighterOnly((prev) => !prev)}
           onClearPage={handleClearPageStrokes}
           onApplyTextPreset={handleApplyTextPreset}
+          onInsertImage={handleInsertImageFile}
         />
       )}
 
@@ -896,6 +963,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
           page={currentPage}
           strokes={strokes}
           textBoxes={textBoxes}
+          images={images}
           activeTool={activeTool}
           currentColor={currentColor}
           currentWidth={currentWidth}
@@ -1051,6 +1119,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
         onDeletePage={handleDeletePage}
         currentStrokes={strokes}
         currentTextBoxes={textBoxes}
+        currentImages={images}
       />
     </div>
   );

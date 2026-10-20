@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Folder, Notebook, Page, Stroke, TextBox, PaperTemplate, PageOrientation } from '../types';
+import type { Folder, Notebook, Page, Stroke, TextBox, NoteImage, PaperTemplate, PageOrientation } from '../types';
 
 export const DEFAULT_A4_WIDTH = 794;
 export const DEFAULT_A4_HEIGHT = 1123;
@@ -24,6 +24,7 @@ export class NoteinDatabase extends Dexie {
   pages!: EntityTable<Page, 'id'>;
   strokes!: EntityTable<Stroke, 'id'>;
   textBoxes!: EntityTable<TextBox, 'id'>;
+  noteImages!: EntityTable<NoteImage, 'id'>;
   folders!: EntityTable<Folder, 'id'>;
 
   constructor() {
@@ -39,6 +40,9 @@ export class NoteinDatabase extends Dexie {
     this.version(3).stores({
       folders: '&id, name, parentId, createdAt, updatedAt',
       notebooks: '&id, title, folderId, createdAt, updatedAt',
+    });
+    this.version(4).stores({
+      noteImages: '&id, pageId, createdAt',
     });
   }
 }
@@ -116,10 +120,11 @@ export async function updateNotebookTitle(id: string, title: string): Promise<vo
 }
 
 export async function deleteNotebook(id: string): Promise<void> {
-  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, async () => {
+  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, db.noteImages, async () => {
     const pages = await db.pages.where('notebookId').equals(id).toArray();
     const pageIds = pages.map((p) => p.id);
 
+    await db.noteImages.where('pageId').anyOf(pageIds).delete();
     await db.textBoxes.where('pageId').anyOf(pageIds).delete();
     await db.strokes.where('pageId').anyOf(pageIds).delete();
     await db.pages.where('notebookId').equals(id).delete();
@@ -210,7 +215,7 @@ export async function duplicatePage(pageId: string): Promise<Page | undefined> {
   const newPageId = crypto.randomUUID();
   const targetNumber = sourcePage.pageNumber + 1;
 
-  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, async () => {
+  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, db.noteImages, async () => {
     for (const p of existingPages) {
       if (p.pageNumber >= targetNumber) {
         await db.pages.update(p.id, { pageNumber: p.pageNumber + 1 });
@@ -258,6 +263,19 @@ export async function duplicatePage(pageId: string): Promise<Page | undefined> {
       await db.textBoxes.bulkAdd(clonedTextBoxes);
     }
 
+    // Duplicate all note images on source page
+    const sourceImages = await db.noteImages.where('pageId').equals(pageId).toArray();
+    const clonedImages: NoteImage[] = sourceImages.map((img) => ({
+      ...img,
+      id: crypto.randomUUID(),
+      pageId: newPageId,
+      createdAt: now,
+    }));
+
+    if (clonedImages.length > 0) {
+      await db.noteImages.bulkAdd(clonedImages);
+    }
+
     await db.notebooks.update(sourcePage.notebookId, {
       pageCount: existingPages.length + 1,
       updatedAt: now,
@@ -279,7 +297,8 @@ export async function deletePage(pageId: string): Promise<boolean> {
     return false;
   }
 
-  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, async () => {
+  await db.transaction('rw', db.notebooks, db.pages, db.strokes, db.textBoxes, db.noteImages, async () => {
+    await db.noteImages.where('pageId').equals(pageId).delete();
     await db.textBoxes.where('pageId').equals(pageId).delete();
     await db.strokes.where('pageId').equals(pageId).delete();
     await db.pages.delete(pageId);
@@ -367,6 +386,62 @@ export async function saveTextBoxesForPage(
   });
 }
 
+
+
+// --- Note Image Operations ---
+
+export async function getImagesForPage(pageId: string): Promise<NoteImage[]> {
+  try {
+    return await db.noteImages.where('pageId').equals(pageId).sortBy('createdAt');
+  } catch (error) {
+    console.error('Failed to get note images:', error);
+    return [];
+  }
+}
+
+export async function saveImagesForPage(
+  pageId: string,
+  images: NoteImage[]
+): Promise<void> {
+  await db.transaction('rw', db.noteImages, db.pages, db.notebooks, async () => {
+    await db.noteImages.where('pageId').equals(pageId).delete();
+    if (images.length > 0) {
+      await db.noteImages.bulkAdd(images);
+    }
+    const page = await db.pages.get(pageId);
+    if (page) {
+      const now = Date.now();
+      await db.pages.update(pageId, { updatedAt: now });
+      await db.notebooks.update(page.notebookId, { updatedAt: now });
+    }
+  });
+}
+
+export async function addNoteImage(image: NoteImage): Promise<void> {
+  await db.transaction('rw', db.noteImages, db.pages, db.notebooks, async () => {
+    await db.noteImages.add(image);
+    const page = await db.pages.get(image.pageId);
+    if (page) {
+      const now = Date.now();
+      await db.pages.update(image.pageId, { updatedAt: now });
+      await db.notebooks.update(page.notebookId, { updatedAt: now });
+    }
+  });
+}
+
+export async function deleteNoteImage(imageId: string): Promise<void> {
+  const img = await db.noteImages.get(imageId);
+  if (!img) return;
+  await db.transaction('rw', db.noteImages, db.pages, db.notebooks, async () => {
+    await db.noteImages.delete(imageId);
+    const page = await db.pages.get(img.pageId);
+    if (page) {
+      const now = Date.now();
+      await db.pages.update(img.pageId, { updatedAt: now });
+      await db.notebooks.update(page.notebookId, { updatedAt: now });
+    }
+  });
+}
 // --- Initial Seed Helper ---
 
 export async function initDefaultData(): Promise<void> {

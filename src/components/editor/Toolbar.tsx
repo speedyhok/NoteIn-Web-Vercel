@@ -61,6 +61,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit2,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { ColorPicker } from './ColorPicker';
 import { StrokeWidthPicker } from './StrokeWidthPicker';
@@ -136,6 +137,7 @@ interface ToolbarProps {
   eraseHighlighterOnly?: boolean;
   onToggleEraseHighlighterOnly?: () => void;
   onClearPage?: () => void;
+  onInsertImage?: (file: File) => void;
   onApplyTextPreset?: (preset: {
     fontFamily?: string;
     fontSize?: number;
@@ -224,6 +226,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   eraseHighlighterOnly = false,
   onToggleEraseHighlighterOnly,
   onClearPage,
+  onInsertImage,
   onApplyTextPreset,
 }) => {
   // Popovers
@@ -269,6 +272,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const [toolbarPos, setToolbarPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef<{ clientX: number; clientY: number; initialX: number; initialY: number } | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Default coordinate calculation
   const getEffectivePos = () => {
@@ -1578,6 +1582,38 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               </>
             )}
           </div>
+
+          {/* Insert Image Tool (NoteIn APK Image Insertion) */}
+          <button
+            onClick={() => imageInputRef.current?.click()}
+            style={{
+              padding: '6px 8px',
+              borderRadius: '8px',
+              color: 'var(--text-secondary)',
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            title="Insert Image (Add photos, diagrams, formulas, or stickers to your notes)"
+          >
+            <ImageIcon size={19} />
+          </button>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file && onInsertImage) {
+                onInsertImage(file);
+              }
+              e.target.value = '';
+            }}
+          />
 
           {/* Ruler Tool (Interactive Translucent Straightedge) */}
           <button

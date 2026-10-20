@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Plus, Copy, Trash2, Loader2 } from 'lucide-react';
-import type { Page, Stroke, TextBox } from '../../types';
+import type { Page, Stroke, TextBox, NoteImage } from '../../types';
 import * as db from '../../db';
 import { renderPaperBackground } from '../../engine/paper';
 import { renderStrokes } from '../../engine/renderer';
@@ -16,6 +16,7 @@ interface PageDrawerProps {
   onDeletePage: (pageId: string) => void;
   currentStrokes?: Stroke[];
   currentTextBoxes?: TextBox[];
+  currentImages?: NoteImage[];
 }
 
 interface PageThumbnailCanvasProps {
@@ -23,6 +24,7 @@ interface PageThumbnailCanvasProps {
   isCurrent: boolean;
   currentStrokes?: Stroke[];
   currentTextBoxes?: TextBox[];
+  currentImages?: NoteImage[];
 }
 
 const PageThumbnailCanvas: React.FC<PageThumbnailCanvasProps> = ({
@@ -30,16 +32,19 @@ const PageThumbnailCanvas: React.FC<PageThumbnailCanvasProps> = ({
   isCurrent,
   currentStrokes,
   currentTextBoxes,
+  currentImages,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [loadedStrokes, setLoadedStrokes] = useState<Stroke[]>([]);
   const [loadedBoxes, setLoadedBoxes] = useState<TextBox[]>([]);
+  const [loadedImages, setLoadedImages] = useState<NoteImage[]>([]);
   const [isLoading, setIsLoading] = useState(!isCurrent);
 
   useEffect(() => {
     if (isCurrent && currentStrokes && currentTextBoxes) {
       setLoadedStrokes(currentStrokes);
       setLoadedBoxes(currentTextBoxes);
+      if (currentImages) setLoadedImages(currentImages);
       setIsLoading(false);
       return;
     }
@@ -47,13 +52,15 @@ const PageThumbnailCanvas: React.FC<PageThumbnailCanvasProps> = ({
     let active = true;
     async function loadData() {
       try {
-        const [s, tb] = await Promise.all([
+        const [s, tb, imgs] = await Promise.all([
           db.getStrokesForPage(page.id),
           db.getTextBoxesForPage(page.id),
+          db.getImagesForPage(page.id),
         ]);
         if (active) {
           setLoadedStrokes(s);
           setLoadedBoxes(tb);
+          setLoadedImages(imgs);
           setIsLoading(false);
         }
       } catch (err) {
@@ -64,7 +71,7 @@ const PageThumbnailCanvas: React.FC<PageThumbnailCanvasProps> = ({
     return () => {
       active = false;
     };
-  }, [page.id, isCurrent, currentStrokes, currentTextBoxes]);
+  }, [page.id, isCurrent, currentStrokes, currentTextBoxes, currentImages]);
 
   const isLandscape = page.orientation === 'landscape' || (page.width && page.height && page.width > page.height);
   const previewWidth = 260;
@@ -96,6 +103,29 @@ const PageThumbnailCanvas: React.FC<PageThumbnailCanvasProps> = ({
     const drawContent = () => {
       const activeStrokes = isCurrent && currentStrokes ? currentStrokes : loadedStrokes;
       const activeBoxes = isCurrent && currentTextBoxes ? currentTextBoxes : loadedBoxes;
+      const activeImages = isCurrent && currentImages ? currentImages : loadedImages;
+
+      // Draw embedded images
+      if (activeImages && activeImages.length > 0) {
+        for (const imgItem of activeImages) {
+          if (!imgItem.src) continue;
+          const img = new Image();
+          img.onload = () => {
+            ctx.save();
+            if (imgItem.rotation) {
+              const cx = imgItem.x + imgItem.width / 2;
+              const cy = imgItem.y + imgItem.height / 2;
+              ctx.translate(cx, cy);
+              ctx.rotate((imgItem.rotation * Math.PI) / 180);
+              ctx.drawImage(img, -imgItem.width / 2, -imgItem.height / 2, imgItem.width, imgItem.height);
+            } else {
+              ctx.drawImage(img, imgItem.x, imgItem.y, imgItem.width, imgItem.height);
+            }
+            ctx.restore();
+          };
+          img.src = imgItem.src;
+        }
+      }
 
       if (activeStrokes && activeStrokes.length > 0) {
         renderStrokes(ctx, activeStrokes);
@@ -180,6 +210,7 @@ export const PageDrawer: React.FC<PageDrawerProps> = ({
   onDeletePage,
   currentStrokes,
   currentTextBoxes,
+  currentImages,
 }) => {
   if (!isOpen) return null;
 
@@ -282,6 +313,7 @@ export const PageDrawer: React.FC<PageDrawerProps> = ({
                     isCurrent={isCurrent}
                     currentStrokes={isCurrent ? currentStrokes : undefined}
                     currentTextBoxes={isCurrent ? currentTextBoxes : undefined}
+                    currentImages={isCurrent ? currentImages : undefined}
                   />
 
                   {/* Page number badge */}

@@ -164,6 +164,20 @@ export interface GoogleDriveFile {
   content?: string;
 }
 
+export interface NoteImage {
+  id: string;
+  pageId: string;
+  src: string;          // base64 data URL
+  x: number;            // X position on page
+  y: number;            // Y position on page
+  width: number;        // Display width
+  height: number;       // Display height
+  rotation?: number;    // Rotation in degrees (default: 0)
+  opacity?: number;     // Opacity 0.0 to 1.0 (default: 1.0)
+  createdAt: number;
+  updatedAt?: number;
+}
+
 export interface NoteinPackage {
   version: "1.0" | "2.0";
   app: "NoteIn";
@@ -172,4 +186,5 @@ export interface NoteinPackage {
   pages: Page[];
   strokes: Stroke[];
   textBoxes: TextBox[];
+  images?: NoteImage[];
 }
